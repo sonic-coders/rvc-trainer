@@ -72,7 +72,7 @@ def load_checkpoint(checkpoint_path, net_g, optim_g, net_d, optim_d):
     return epoch
 
 
-def extract_model(hps, ckpt, epoch, step, filepath):
+def extract_model(hps, ckpt, epoch, step, filepath, half=True):
     """
     Извлекает и сохраняет модель для инференса.
 
@@ -82,12 +82,17 @@ def extract_model(hps, ckpt, epoch, step, filepath):
         epoch: Номер эпохи.
         step: Номер шага.
         filepath: Полный путь для сохранения файла.
+        half: Если True — сохраняет веса в float16 (меньше размер).
+              Если False — сохраняет веса в float32 (полная точность).
 
     Returns:
         Сообщение об успехе или ошибке.
     """
     try:
-        opt = OrderedDict(weight={key: value.half() for key, value in ckpt.items() if "enc_q" not in key})
+        def precision(value):
+            return value.half() if half else value.float()
+
+        opt = OrderedDict(weight={key: precision(value) for key, value in ckpt.items() if "enc_q" not in key})
         opt["config"] = [
             hps.data.filter_length // 2 + 1,
             32,
