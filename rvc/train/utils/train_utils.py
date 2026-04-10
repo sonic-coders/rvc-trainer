@@ -12,21 +12,22 @@ def replace_keys_in_dict(d, old_key_part, new_key_part):
     return updated_dict
 
 
-def save_checkpoint(net_g, optim_g, net_d, optim_d, learning_rate, epoch, checkpoint_path):
+def save_checkpoint(net_g, optim_g, net_d, optim_d, epoch, checkpoint_path):
     """Сохранение чекпоинта (G + D + optimizers)."""
     g_state = net_g.module.state_dict() if hasattr(net_g, "module") else net_g.state_dict()
     d_state = net_d.module.state_dict() if hasattr(net_d, "module") else net_d.state_dict()
 
     checkpoint_data = {
         "epoch": epoch,
-        "learning_rate": learning_rate,
         "generator": {
             "model": g_state,
             "optimizer": optim_g.state_dict(),
+            "lr": optim_g.param_groups[0]["lr"],
         },
         "discriminator": {
             "model": d_state,
             "optimizer": optim_d.state_dict(),
+            "lr": optim_d.param_groups[0]["lr"],
         },
     }
 

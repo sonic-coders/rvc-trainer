@@ -439,7 +439,7 @@ def train_and_evaluate(hps, rank, epoch, nets, optims, train_loader, writer_eval
         if should_save_checkpoint:
             # Сохранение чекпоинта
             checkpoint_path = os.path.join(hps.model_dir, "checkpoint.pth")
-            save_checkpoint(net_g, optim_g, net_d, optim_d, hps.train.learning_rate, epoch, checkpoint_path)
+            save_checkpoint(net_g, optim_g, net_d, optim_d, epoch, checkpoint_path)
 
             # Сохранение промежуточной модели
             weights_dir = os.path.join(hps.model_dir, "weights")
