@@ -84,6 +84,7 @@ def get_hparams():
     parser.add_argument("--pretrain_d", type=str, default=None)
     parser.add_argument("--gpus", type=str, default="0")
     parser.add_argument("--save_to_zip", type=lambda x: bool(strtobool(x)), choices=[True, False], default=False)
+    parser.add_argument("--save_half", type=lambda x: bool(strtobool(x)), choices=[True, False], default=True)
     args = parser.parse_args()
 
     experiment_dir = os.path.join(args.experiment_dir, args.model_name)
@@ -108,6 +109,7 @@ def get_hparams():
     hparams.pretrain_d = args.pretrain_d
     hparams.gpus = args.gpus
     hparams.save_to_zip = args.save_to_zip
+    hparams.save_half = args.save_half
     hparams.data.training_files = f"{experiment_dir}/data/filelist.txt"
 
     print(" \n\nПАРАМЕТРЫ ОБУЧЕНИЯ ")
@@ -124,8 +126,8 @@ def get_hparams():
         print(f"{'Pretrain G:':<30} {hparams.pretrain_g}")
     if args.pretrain_d:
         print(f"{'Pretrain D:':<30} {hparams.pretrain_d}")
-    print(f"{'GPU:':<30} {hparams.gpus}")
     print(f"{'Сохранение в ZIP:':<30} {'Да' if hparams.save_to_zip else 'Нет'}")
+    print(f"{'Точность моделей:':<30} {'float16' if hparams.save_half else 'float32'}")
     print("=" * 70 + "\n")
     return hparams
 
@@ -445,13 +447,13 @@ def train_and_evaluate(hps, rank, epoch, nets, optims, train_loader, writer_eval
 
             checkpoint_state = net_g.module.state_dict() if hasattr(net_g, "module") else net_g.state_dict()
             intermediate_path = os.path.join(weights_dir, f"{hps.model_name}_e{epoch}_s{global_step}.pth")
-            print(extract_model(hps, checkpoint_state, epoch, global_step, intermediate_path), flush=True)
+            print(extract_model(hps, checkpoint_state, epoch, global_step, intermediate_path, hps.save_half), flush=True)
 
             # Финальная эпоха
             if is_final_epoch:
                 # Сохранение last модели
                 last_path = os.path.join(hps.model_dir, f"{hps.model_name}_e{epoch}_s{global_step}_last.pth")
-                print(extract_model(hps, checkpoint_state, epoch, global_step, last_path), flush=True)
+                print(extract_model(hps, checkpoint_state, epoch, global_step, last_path, hps.save_half), flush=True)
 
                 # Архивирование
                 if hps.save_to_zip:
