@@ -96,7 +96,7 @@ def extract_model(hps, ckpt, epoch, step, filepath, half=True):
         opt = OrderedDict(weight={key: precision(value) for key, value in ckpt.items() if "enc_q" not in key})
         opt["config"] = [
             hps.data.filter_length // 2 + 1,
-            32,
+            hps.train.segment_size // hps.data.hop_length,
             hps.model.inter_channels,
             hps.model.hidden_channels,
             hps.model.filter_channels,
