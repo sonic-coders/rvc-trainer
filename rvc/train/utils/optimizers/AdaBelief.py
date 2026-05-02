@@ -29,7 +29,7 @@ class AdaBelief(Optimizer):
         lr: float = 1e-4,
         betas: Tuple[float, float] = (0.8, 0.99),
         eps: float = 1e-10,
-        weight_decay: float = 0,
+        weight_decay: float = 0.0,
         foreach: bool = True,
         use_gc: bool = False,
     ) -> None:
@@ -58,7 +58,7 @@ class AdaBelief(Optimizer):
         super().__setstate__(state)
         for group in self.param_groups:
             group.setdefault("foreach", True)
-            group.setdefault("use_gc", True)
+            group.setdefault("use_gc", False)
 
     @torch.no_grad()
     def step(self, closure=None):
