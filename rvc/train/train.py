@@ -194,7 +194,7 @@ def run(hps, rank, n_gpus, device, device_id):
         train_dataset = TextAudioLoaderMultiNSFsid(hps.data)
         train_sampler = DistributedBucketSampler(
             train_dataset,
-            hps.batch_size * n_gpus,
+            hps.batch_size,
             [50, 100, 200, 300, 400, 500, 600, 700, 800, 900],
             num_replicas=n_gpus,
             rank=rank,
