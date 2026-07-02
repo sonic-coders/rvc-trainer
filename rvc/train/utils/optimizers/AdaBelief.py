@@ -68,63 +68,9 @@ class AdaBelief(Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            if group["foreach"]:
-                self._step_foreach(group)
-            else:
-                self._step_single(group)
+            self._step_foreach(group)
 
         return loss
-
-    def _step_single(self, group: Dict) -> None:
-        beta1, beta2 = group["betas"]
-        eps = group["eps"]
-        lr = group["lr"]
-        weight_decay = group["weight_decay"]
-        use_gc = group["use_gc"]
-
-        for p in group["params"]:
-            if p.grad is None:
-                continue
-
-            grad = p.grad
-            if grad.is_sparse:
-                raise RuntimeError("AdaBelief does not support sparse gradients")
-
-            # Gradient Centralization
-            if use_gc and grad.dim() > 1:
-                grad.add_(-grad.mean(dim=tuple(range(1, grad.dim())), keepdim=True))
-
-            state = self.state[p]
-
-            if len(state) == 0:
-                state["step"] = 0
-                state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                state["exp_avg_var"] = torch.zeros_like(p, memory_format=torch.preserve_format)
-
-            exp_avg = state["exp_avg"]
-            exp_avg_var = state["exp_avg_var"]
-
-            state["step"] += 1
-            step = state["step"]
-
-            bias_correction1 = 1 - beta1 ** step
-            bias_correction2 = 1 - beta2 ** step
-
-            if weight_decay != 0:
-                p.mul_(1 - lr * weight_decay)
-
-            # m_t = β₁·m_{t-1} + (1-β₁)·g_t
-            exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
-
-            # s_t = β₂·s_{t-1} + (1-β₂)·(g_t - m_t)²
-            grad_residual = grad - exp_avg
-            exp_avg_var.mul_(beta2).addcmul_(grad_residual, grad_residual, value=1 - beta2)
-
-            # denom = sqrt(s_t + eps) / sqrt(bc2)
-            denom = (exp_avg_var.add(eps)).sqrt() / math.sqrt(bias_correction2)
-
-            step_size = lr / bias_correction1
-            p.addcdiv_(exp_avg, denom, value=-step_size)
 
     def _step_foreach(self, group: Dict) -> None:
         beta1, beta2 = group["betas"]
@@ -190,4 +136,4 @@ class AdaBelief(Optimizer):
 
         step_size = lr / bias_correction1
         updates = torch._foreach_div(exp_avgs, denom)
-        torch._foreach_add_(params_with_grad, updates, alpha=-step_size)
+        torch._foreach_add_(params_with_grad, updates, value=-step_size)
