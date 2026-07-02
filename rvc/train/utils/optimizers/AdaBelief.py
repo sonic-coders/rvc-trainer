@@ -7,7 +7,7 @@ from torch.optim.optimizer import Optimizer
 
 
 class AdaBelief(Optimizer):
-    """AdaBelief Optimizer с поддержкой Gradient Centralization.
+    """AdaBelief Optimizer с поддержкой Gradient Centralization и Rectified-обновления.
 
     Исправленная версия без багов оригинала + GC для стабильности GAN.
 
@@ -18,6 +18,7 @@ class AdaBelief(Optimizer):
         eps: numerical stability (default: 1e-10)
         weight_decay: decoupled weight decay (default: 0)
         use_gc: enable Gradient Centralization (default: False)
+        rectify: enable Rectified update as in RAdam (default: False).
     """
 
     def __init__(
@@ -28,6 +29,7 @@ class AdaBelief(Optimizer):
         eps: float = 1e-10,
         weight_decay: float = 0.0,
         use_gc: bool = False,
+        rectify: bool = False,
     ) -> None:
         if lr <= 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -46,6 +48,7 @@ class AdaBelief(Optimizer):
             eps=eps,
             weight_decay=weight_decay,
             use_gc=use_gc,
+            rectify=rectify,
         )
         super().__init__(params, defaults)
 
@@ -53,6 +56,7 @@ class AdaBelief(Optimizer):
         super().__setstate__(state)
         for group in self.param_groups:
             group.setdefault("use_gc", False)
+            group.setdefault("rectify", False)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -67,6 +71,7 @@ class AdaBelief(Optimizer):
             lr = group["lr"]
             weight_decay = group["weight_decay"]
             use_gc = group["use_gc"]
+            rectify = group["rectify"]
 
             params_with_grad: List[Tensor] = []
             grads: List[Tensor] = []
@@ -80,8 +85,7 @@ class AdaBelief(Optimizer):
                 params_with_grad.append(p)
                 grad = p.grad
 
-                # Gradient Centralization
-                if use_gc and grad.dim() > 1:
+                if use_gc and grad.dim() > 1 and grad[0].numel() > 1:
                     grad.add_(-grad.mean(dim=tuple(range(1, grad.dim())), keepdim=True))
 
                 grads.append(grad)
@@ -119,12 +123,28 @@ class AdaBelief(Optimizer):
             torch._foreach_mul_(exp_avg_vars, beta2)
             torch._foreach_addcmul_(exp_avg_vars, grad_residuals, grad_residuals, value=1 - beta2)
 
-            denom = torch._foreach_add(exp_avg_vars, eps)
-            denom = torch._foreach_sqrt(denom)
-            torch._foreach_div_(denom, math.sqrt(bias_correction2))
+            use_variance = True
+            r_t = 1.0
+            if rectify:
+                rho_inf = 2.0 / (1.0 - beta2) - 1.0
+                beta2_t = beta2**step
+                rho_t = rho_inf - 2.0 * step * beta2_t / (1.0 - beta2_t)
+                use_variance = rho_t >= 5.0
+                if use_variance:
+                    r_t = math.sqrt(
+                        ((rho_t - 4) * (rho_t - 2) * rho_inf) / ((rho_inf - 4) * (rho_inf - 2) * rho_t)
+                    )
 
-            step_size = lr / bias_correction1
-            updates = torch._foreach_div(exp_avgs, denom)
-            torch._foreach_add_(params_with_grad, updates, alpha=-step_size)
+            if use_variance:
+                denom = torch._foreach_add(exp_avg_vars, eps)
+                denom = torch._foreach_sqrt(denom)
+                torch._foreach_div_(denom, math.sqrt(bias_correction2))
+
+                step_size = lr * r_t / bias_correction1
+                updates = torch._foreach_div(exp_avgs, denom)
+                torch._foreach_add_(params_with_grad, updates, alpha=-step_size)
+            else:
+                step_size = lr / bias_correction1
+                torch._foreach_add_(params_with_grad, exp_avgs, alpha=-step_size)
 
         return loss
