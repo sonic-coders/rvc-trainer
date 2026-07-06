@@ -8,6 +8,16 @@ hann_window = {}
 
 
 def spectrogram_torch(y, n_fft, hop_size, win_size, center=False):
+    """
+    Compute the spectrogram of a signal using STFT.
+
+    Args:
+        y (torch.Tensor): Input signal.
+        n_fft (int): FFT window size.
+        hop_size (int): Hop size between frames.
+        win_size (int): Window size.
+        center (bool, optional): Whether to center the window. Defaults to False.
+    """
     global hann_window
     dtype_device = str(y.dtype) + "_" + str(y.device)
     wnsize_dtype_device = str(win_size) + "_" + dtype_device
@@ -34,6 +44,17 @@ def spectrogram_torch(y, n_fft, hop_size, win_size, center=False):
 
 
 def spec_to_mel_torch(spec, n_fft, num_mels, sample_rate, fmin, fmax):
+    """
+    Convert a spectrogram to a mel-spectrogram.
+
+    Args:
+        spec (torch.Tensor): Magnitude spectrogram.
+        n_fft (int): FFT window size.
+        num_mels (int): Number of mel frequency bins.
+        sample_rate (int): Sampling rate of the audio signal.
+        fmin (float): Minimum frequency.
+        fmax (float): Maximum frequency.
+    """
     global mel_basis
     dtype_device = str(spec.dtype) + "_" + str(spec.device)
     fmax_dtype_device = str(fmax) + "_" + dtype_device
@@ -47,6 +68,20 @@ def spec_to_mel_torch(spec, n_fft, num_mels, sample_rate, fmin, fmax):
 
 
 def mel_spectrogram_torch(y, n_fft, num_mels, sample_rate, hop_size, win_size, fmin, fmax, center=False):
+    """
+    Compute the mel-spectrogram of a signal.
+
+    Args:
+        y (torch.Tensor): Input signal.
+        n_fft (int): FFT window size.
+        num_mels (int): Number of mel frequency bins.
+        sample_rate (int): Sampling rate of the audio signal.
+        hop_size (int): Hop size between frames.
+        win_size (int): Window size.
+        fmin (float): Minimum frequency.
+        fmax (float): Maximum frequency.
+        center (bool, optional): Whether to center the window. Defaults to False.
+    """
     spec = spectrogram_torch(y, n_fft, hop_size, win_size, center)
     melspec = spec_to_mel_torch(spec, n_fft, num_mels, sample_rate, fmin, fmax)
     return melspec
@@ -60,6 +95,10 @@ def compute_window_length(n_mels: int, sample_rate: int):
     return 2 ** (window_length.bit_length() - 1)
 
 
+def compute_hop_length(window_length: int):
+    return max(window_length // 4, 1)
+
+
 class MultiScaleMelSpectrogramLoss(torch.nn.Module):
     def __init__(self, sample_rate: int = 24000, n_mels: list[int] = [5, 10, 20, 40, 80, 160, 320, 480], loss_fn=torch.nn.L1Loss()):
         super().__init__()
@@ -69,7 +108,10 @@ class MultiScaleMelSpectrogramLoss(torch.nn.Module):
         self.stft_params: list[tuple] = []
         self.hann_window: dict[int, torch.Tensor] = {}
         self.mel_banks: dict[int, torch.Tensor] = {}
-        self.stft_params = [(mel, compute_window_length(mel, sample_rate), self.sample_rate // 100) for mel in n_mels]
+        self.stft_params = [
+            (mel, compute_window_length(mel, sample_rate), compute_hop_length(compute_window_length(mel, sample_rate)))
+            for mel in n_mels
+        ]
 
     def mel_spectrogram(self, wav: torch.Tensor, n_mels: int, window_length: int, hop_length: int):
         dtype_device = str(wav.dtype) + "_" + str(wav.device)
