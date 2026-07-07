@@ -79,7 +79,7 @@ def get_hparams():
     parser.add_argument("--batch_size", type=int, choices=range(1, 129), default=8)
     parser.add_argument("--sample_rate", type=int, choices=[32000, 40000, 48000], default=48000)
     parser.add_argument("--vocoder", type=str, choices=["HiFi-GAN", "MRF HiFi-GAN", "RefineGAN"], default="HiFi-GAN")
-    parser.add_argument("--optimizer", type=str, choices=["AdamW", "AdaBelief"], default="AdamW")
+    parser.add_argument("--optimizer", type=str, choices=["AdamW", "AdaBelief", "PolOpt"], default="AdamW")
     parser.add_argument("--pretrain_g", type=str, default=None)
     parser.add_argument("--pretrain_d", type=str, default=None)
     parser.add_argument("--gpus", type=str, default="0")
@@ -233,6 +233,11 @@ def run(hps, rank, n_gpus, device, device_id):
 
             optim_g = AdaBelief(net_g.parameters(), lr=hps.train.learning_rate, betas=hps.train.betas, eps=1e-8)
             optim_d = AdaBelief(net_d.parameters(), lr=hps.train.learning_rate, betas=hps.train.betas, eps=1e-8)
+        elif hps.optimizer == "PolOpt":
+            from rvc.train.utils.optimizers.PolOpt import PolOpt
+
+            optim_g = PolOpt(net_g.parameters(), lr=hps.train.learning_rate, betas=(0.8, 0.99), eps=1e-7, weight_decay=0.01, max_step_clip=1.0)
+            optim_d = PolOpt(net_d.parameters(), lr=hps.train.learning_rate * 1.5, betas=(0.5, 0.99), eps=1e-7, weight_decay=0.01, max_step_clip=1.0)
         else:
             optim_g = torch.optim.AdamW(net_g.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
             optim_d = torch.optim.AdamW(net_d.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
@@ -279,7 +284,7 @@ def run(hps, rank, n_gpus, device, device_id):
                     d_model.load_state_dict(torch.load(hps.pretrain_d, map_location="cpu", weights_only=False)["model"])
 
         # Настройка scheduler
-        if hps.optimizer == "AdaBelief":
+        if hps.optimizer in ("AdaBelief", "PolOpt"):
             scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optim_g, T_max=hps.total_epoch, eta_min=1e-6, last_epoch=epoch_str - 2)
             scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optim_d, T_max=hps.total_epoch, eta_min=1e-6, last_epoch=epoch_str - 2)
         else:
