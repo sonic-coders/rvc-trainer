@@ -116,9 +116,9 @@ class AdaBelief(Optimizer):
             torch._foreach_mul_(exp_avg_vars, beta2)
             torch._foreach_addcmul_(exp_avg_vars, grad_residuals, grad_residuals, value=1 - beta2)
 
-            denom = torch._foreach_sqrt(exp_avg_vars)
+            denom = torch._foreach_add(exp_avg_vars, eps)
+            denom = torch._foreach_sqrt(denom)
             torch._foreach_div_(denom, math.sqrt(bias_correction2))
-            torch._foreach_add_(denom, eps)
 
             step_size = lr / bias_correction1
             updates = torch._foreach_div(exp_avgs, denom)
