@@ -21,6 +21,28 @@ sample_rate = int(sys.argv[4])  # Частота дискретизации в �
 normalize = sys.argv[5] == "True"  # Флаг для включения/выключения нормализации
 num_processes = max(1, os.cpu_count() - 1)  # Количество процессов
 
+# Поддерживаемые аудио-расширения
+AUDIO_EXTENSIONS = {
+    ".wav",
+    ".flac",
+    ".mp3",
+    ".ogg",
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".wma",
+    ".aiff",
+    ".aif",
+    ".aifc",
+    ".mp4",
+    ".mkv",
+    ".webm",
+}
+
+
+def is_audio_file(path):
+    return os.path.isfile(path) and os.path.splitext(path)[1].lower() in AUDIO_EXTENSIONS
+
 
 class PreProcess:
     def __init__(self, sample_rate, exp_dir, percentage=3.0, normalize=True):
@@ -100,8 +122,20 @@ class PreProcess:
     def pipeline_mp_inp_dir(self, input_root, num_processes):
         print("Инициализация процесса сегментации аудиоданных...")
         try:
-            # Сбор информации о файлах в директории
-            infos = [(os.path.join(input_root, name), idx) for idx, name in enumerate(sorted(list(os.listdir(input_root))))]
+            # Собираем только аудиофайлы; всё остальное в папке датасета игнорируем
+            names = sorted(
+                name
+                for name in os.listdir(input_root)
+                if is_audio_file(os.path.join(input_root, name))
+            )
+            if not names:
+                raise FileNotFoundError(
+                    f"В папке '{input_root}' не найдено ни одного аудиофайла "
+                    f"(поддерживаются: {', '.join(sorted(AUDIO_EXTENSIONS))})."
+                )
+            print(f"Найдено аудиофайлов: {len(names)}")
+
+            infos = [(os.path.join(input_root, name), idx) for idx, name in enumerate(names)]
 
             # Параллельная обработка
             ps = []
