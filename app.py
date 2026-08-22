@@ -1,3 +1,6 @@
+# GUI BY BF667
+
+
 import gradio as gr
 import os
 import re
@@ -7,9 +10,12 @@ from urllib.parse import urlparse
 from subprocess import PIPE, STDOUT, Popen
 import numpy as np
 
+
+BASE_ROOT = sys.path.append(os.getcwd())
+
 # Configuration
-ROOT_DIR = "/PolTrain"
-SAVE_DIR = "/drive/MyDrive/PolTrain"
+ROOT_DIR = f"{BASE_ROOT}/rvc-trainer"
+SAVE_DIR = f"{ROOT_DIR}/drive/MyDrive/rvc-trainer"
 config = type('config', (), {
     'n_cpu': os.cpu_count() or 4,
     'iscolab': True,
