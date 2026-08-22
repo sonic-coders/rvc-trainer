@@ -1,11 +1,12 @@
 # GUI BY BF667
 
-
 import gradio as gr
 import os
 import re
 import shutil
 import traceback
+import sys
+import glob
 from urllib.parse import urlparse
 from subprocess import PIPE, STDOUT, Popen
 import numpy as np
@@ -17,14 +18,15 @@ parser.add_argument("--colab", action="store_true", help="Launch in colab")
 args = parser.parse_args()
 iscolab = args.colab
 
-BASE_ROOT = sys.path.append(os.getcwd())
+BASE_ROOT = os.getcwd()
+sys.path.append(BASE_ROOT)
 
 # Configuration
 ROOT_DIR = f"{BASE_ROOT}/rvc-trainer"
 SAVE_DIR = f"{ROOT_DIR}/drive/MyDrive/rvc-trainer"
 config = type('config', (), {
     'n_cpu': os.cpu_count() or 4,
-    'iscolab': True,
+    'iscolab': iscolab,
     'noautoopen': False,
     'listen_port': 7860
 })()
@@ -133,7 +135,11 @@ def preprocess_dataset(dataset_folder, training_name, sr2, np7):
         
         # Dataset segmentation and resampling
         preprocess_script = f"{ROOT_DIR}/rvc/train/preprocess/preprocess.py"
-        !python {preprocess_script} {SAVE_DIR}/{training_name} {dataset_folder} {percentage} {sample_rate} {normalize}
+        cmd = f"python {preprocess_script} {SAVE_DIR}/{training_name} {dataset_folder} {percentage} {sample_rate} {normalize}"
+        exit_code = os.system(cmd)
+        
+        if exit_code != 0:
+            return f"❌ Error during preprocessing! Exit code: {exit_code}"
         
         return "✅ Data preprocessing completed successfully!"
     except Exception as e:
@@ -148,7 +154,11 @@ def extract_f0_feature(gpus6, np7, f0method8, if_f0_3, training_name, version19,
         
         # Extraction of average pitch and sound characteristics
         preparing_data_script = f"{ROOT_DIR}/rvc/train/preprocess/preparing_data.py"
-        !python {preparing_data_script} {SAVE_DIR}/{training_name} {arch_fairseq} {f0_method} {sample_rate} 2
+        cmd = f"python {preparing_data_script} {SAVE_DIR}/{training_name} {arch_fairseq} {f0_method} {sample_rate} 2"
+        exit_code = os.system(cmd)
+        
+        if exit_code != 0:
+            return f"❌ Error during feature extraction! Exit code: {exit_code}"
         
         return "✅ Feature extraction completed successfully!"
     except Exception as e:
@@ -160,7 +170,11 @@ def train_index(training_name, version19):
         
         # Generate index file based on characteristics
         extract_index_script = f"{ROOT_DIR}/rvc/train/preprocess/extract_index.py"
-        !python {extract_index_script} {SAVE_DIR}/{training_name} {index_algorithm}
+        cmd = f"python {extract_index_script} {SAVE_DIR}/{training_name} {index_algorithm}"
+        exit_code = os.system(cmd)
+        
+        if exit_code != 0:
+            return f"❌ Error during index training! Exit code: {exit_code}"
         
         return "✅ Index training completed successfully!"
     except Exception as e:
@@ -253,6 +267,9 @@ def click_train(
                 print(line)
         
         p.wait()
+        
+        if p.returncode != 0:
+            return f"❌ Error during training! Exit code: {p.returncode}"
         
         return "✅ Training completed successfully!"
     except Exception as e:
