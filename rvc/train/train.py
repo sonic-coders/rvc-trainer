@@ -3,11 +3,11 @@ import os
 import sys
 import warnings
 
-# Настройка окружения
+# Environment setup
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["USE_LIBUV"] = "0" if sys.platform == "win32" else "1"
 
-# Настройка логирования и подавление предупреждений
+# Logging setup and warning suppression
 logging.basicConfig(level=logging.WARNING)
 warnings.filterwarnings("ignore")
 
@@ -45,7 +45,7 @@ global_step = 0
 
 
 class MetricsAccumulator:
-    """Аккумулятор метрик для вычисления средних значений за эпоху."""
+    """Metric accumulator for computing average values per epoch."""
 
     def __init__(self):
         self.sums = defaultdict(float)
@@ -90,11 +90,11 @@ def get_hparams():
     experiment_dir = os.path.join(args.experiment_dir, args.model_name)
     config_save_path = os.path.join(experiment_dir, "data", "config.json")
 
-    # Генерация файла конфигурации
+    # Generate configuration file
     if not os.path.exists(config_save_path):
         generate_config(config_save_path, args.sample_rate, args.vocoder)
 
-    # Загрузка файла конфигурации
+    # Load configuration file
     with open(config_save_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
@@ -112,22 +112,22 @@ def get_hparams():
     hparams.save_half = args.save_half
     hparams.data.training_files = f"{experiment_dir}/data/filelist.txt"
 
-    print(" \n\nПАРАМЕТРЫ ОБУЧЕНИЯ ")
+    print(" \n\nTRAINING PARAMETERS ")
     print("=" * 70)
-    print(f"{'Папка сохранения:':<30} {hparams.model_dir}")
-    print(f"{'Имя модели:':<30} {hparams.model_name}")
-    print(f"{'Эпох обучения:':<30} {hparams.total_epoch}")
-    print(f"{'Сохранение каждые:':<30} {hparams.save_every_epoch} эпох")
-    print(f"{'Размер батча:':<30} {hparams.batch_size}")
-    print(f"{'Частота дискретизации:':<30} {hparams.data.sample_rate} Hz")
-    print(f"{'Вокодер:':<30} {hparams.model.vocoder}")
-    print(f"{'Оптимизатор:':<30} {hparams.optimizer}")
+    print(f"{'Save folder:':<30} {hparams.model_dir}")
+    print(f"{'Model name:':<30} {hparams.model_name}")
+    print(f"{'Training epochs:':<30} {hparams.total_epoch}")
+    print(f"{'Save every:':<30} {hparams.save_every_epoch} epochs")
+    print(f"{'Batch size:':<30} {hparams.batch_size}")
+    print(f"{'Sample rate:':<30} {hparams.data.sample_rate} Hz")
+    print(f"{'Vocoder:':<30} {hparams.model.vocoder}")
+    print(f"{'Optimizer:':<30} {hparams.optimizer}")
     if args.pretrain_g:
         print(f"{'Pretrain G:':<30} {hparams.pretrain_g}")
     if args.pretrain_d:
         print(f"{'Pretrain D:':<30} {hparams.pretrain_d}")
-    print(f"{'Сохранение в ZIP:':<30} {'Да' if hparams.save_to_zip else 'Нет'}")
-    print(f"{'Точность моделей:':<30} {'float16' if hparams.save_half else 'float32'}")
+    print(f"{'Save to ZIP:':<30} {'Yes' if hparams.save_to_zip else 'No'}")
+    print(f"{'Model precision:':<30} {'float16' if hparams.save_half else 'float32'}")
     print("=" * 70 + "\n")
     return hparams
 
@@ -155,7 +155,7 @@ def main():
     gpus = [int(item) for item in hps.gpus.split("-")] if device.type == "cuda" else [0]
     n_gpus = len(gpus)
     if device.type == "cpu":
-        print("Обучение с использованием процессора займёт много времени.", flush=True)
+        print("Training on CPU will take a long time.", flush=True)
 
     children = []
     for rank, device_id in enumerate(gpus):
@@ -246,14 +246,14 @@ def run(hps, rank, n_gpus, device, device_id):
             net_g = DDP(net_g, device_ids=[device_id])
             net_d = DDP(net_d, device_ids=[device_id])
 
-        # Загрузка чекпоинта
+        # Load checkpoint
         epoch_str = None
         checkpoint_path = os.path.join(hps.model_dir, "checkpoint.pth")
         if os.path.exists(checkpoint_path):
             try:
                 epoch_str = load_checkpoint(checkpoint_path, net_g, optim_g, net_d, optim_d)
             except Exception as e:
-                print(f"Ошибка загрузки checkpoint.pth:\n{e}", flush=True)
+                print(f"Error loading checkpoint.pth:\n{e}", flush=True)
 
         if epoch_str is not None:
             epoch_str += 1
@@ -262,28 +262,28 @@ def run(hps, rank, n_gpus, device, device_id):
             epoch_str = 1
             global_step = 0
 
-            # Загрузка претрейнов если чекпоинт не найден
+            # Load pretrained models if checkpoint not found
             if hps.pretrain_g not in ("", "None", None):
                 if rank == 0:
-                    print(f"Загрузка претрейна генератора: '{hps.pretrain_g}'", flush=True)
+                    print(f"Loading generator pretrain: '{hps.pretrain_g}'", flush=True)
                 g_model = net_g.module if hasattr(net_g, "module") else net_g
                 try:
                     g_model.load_state_dict(torch.load(hps.pretrain_g, map_location="cpu", weights_only=True)["model"])
                 except Exception:
-                    print("Загрузка претрейна генератора в небезопасном режиме...", flush=True)
+                    print("Loading generator pretrain in unsafe mode...", flush=True)
                     g_model.load_state_dict(torch.load(hps.pretrain_g, map_location="cpu", weights_only=False)["model"])
 
             if hps.pretrain_d not in ("", "None", None):
                 if rank == 0:
-                    print(f"Загрузка претрейна дискриминатора: '{hps.pretrain_d}'", flush=True)
+                    print(f"Loading discriminator pretrain: '{hps.pretrain_d}'", flush=True)
                 d_model = net_d.module if hasattr(net_d, "module") else net_d
                 try:
                     d_model.load_state_dict(torch.load(hps.pretrain_d, map_location="cpu", weights_only=True)["model"])
                 except Exception:
-                    print("Загрузка претрейна дискриминатора в небезопасном режиме...", flush=True)
+                    print("Loading discriminator pretrain in unsafe mode...", flush=True)
                     d_model.load_state_dict(torch.load(hps.pretrain_d, map_location="cpu", weights_only=False)["model"])
 
-        # Настройка scheduler
+        # Setup scheduler
         if hps.optimizer in ("AdaBelief", "PolOpt"):
             scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(optim_g, T_max=hps.total_epoch, eta_min=1e-6, last_epoch=epoch_str - 2)
             scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(optim_d, T_max=hps.total_epoch, eta_min=1e-6, last_epoch=epoch_str - 2)
@@ -291,16 +291,16 @@ def run(hps, rank, n_gpus, device, device_id):
             scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2)
             scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr_decay, last_epoch=epoch_str - 2)
 
-        # Проверка: не превышает ли загруженная эпоха целевую
+        # Check: does the loaded epoch exceed the target
         if epoch_str > hps.total_epoch:
             if rank == 0:
                 print(
-                    f"\n⚠️  Загруженный чекпоинт (эпоха {epoch_str - 1}) уже превышает указанное количество эпох ({hps.total_epoch}).",
+                    f"\n⚠️  Loaded checkpoint (epoch {epoch_str - 1}) already exceeds the specified number of epochs ({hps.total_epoch}).",
                     flush=True,
                 )
             return
 
-        print("\nЗапуск процесса обучения модели...", flush=True)
+        print("\nStarting model training process...", flush=True)
         epoch_recorder = EpochRecorder() if rank == 0 else None
         for epoch in range(epoch_str, hps.total_epoch + 1):
             train_and_evaluate(
@@ -319,7 +319,7 @@ def run(hps, rank, n_gpus, device, device_id):
             scheduler_g.step()
             scheduler_d.step()
     finally:
-        # Уничтожение группы процессов для корректного закрытия программы
+        # Destroy process group for clean program termination
         if dist.is_initialized():
             dist.destroy_process_group()
 
@@ -370,7 +370,7 @@ def train_and_evaluate(hps, rank, epoch, nets, optims, train_loader, writer_eval
             grad_norm_g = grad_norm(net_g.parameters())
             optim_g.step()
 
-        # Аккумуляция метрик
+        # Accumulate metrics
         acc.update(**{
             "loss/avg/d": loss_disc,
             "loss/avg/g": loss_gen,
@@ -382,7 +382,7 @@ def train_and_evaluate(hps, rank, epoch, nets, optims, train_loader, writer_eval
             "grad/norm_g": grad_norm_g,
         })
 
-        # Сохраняем данные последнего батча для визуализации
+        # Save last batch data for visualization
         if rank == 0:
             last_batch = (spec, ids_slice, y_hat)
 
@@ -428,25 +428,25 @@ def train_and_evaluate(hps, rank, epoch, nets, optims, train_loader, writer_eval
         for k, v in image_dict.items():
             writer_eval.add_image(k, v, epoch, dataformats="HWC")
 
-    # Вывод в консоль
+    # Console output
     if rank == 0:
         print(
             f"{epoch_recorder.record()}: {hps.model_name} ▸ "
-            f"Эпоха {epoch}/{hps.total_epoch} (Шаг {global_step})",
+            f"Epoch {epoch}/{hps.total_epoch} (Step {global_step})",
             flush=True,
         )
 
-    # Сохранение моделей
+    # Save models
     if rank == 0:
         is_final_epoch = epoch >= hps.total_epoch
         should_save_checkpoint = (epoch % hps.save_every_epoch == 0) or is_final_epoch
 
         if should_save_checkpoint:
-            # Сохранение чекпоинта
+            # Save checkpoint
             checkpoint_path = os.path.join(hps.model_dir, "checkpoint.pth")
             save_checkpoint(net_g, optim_g, net_d, optim_d, epoch, checkpoint_path)
 
-            # Сохранение промежуточной модели
+            # Save intermediate model
             weights_dir = os.path.join(hps.model_dir, "weights")
             os.makedirs(weights_dir, exist_ok=True)
 
@@ -454,28 +454,28 @@ def train_and_evaluate(hps, rank, epoch, nets, optims, train_loader, writer_eval
             intermediate_path = os.path.join(weights_dir, f"{hps.model_name}_e{epoch}_s{global_step}.pth")
             print(extract_model(hps, checkpoint_state, epoch, global_step, intermediate_path, hps.save_half), flush=True)
 
-            # Финальная эпоха
+            # Final epoch
             if is_final_epoch:
-                # Сохранение last модели
+                # Save last model
                 last_path = os.path.join(hps.model_dir, f"{hps.model_name}_e{epoch}_s{global_step}_last.pth")
                 print(extract_model(hps, checkpoint_state, epoch, global_step, last_path, hps.save_half), flush=True)
 
-                # Архивирование
+                # Archive
                 if hps.save_to_zip:
                     import zipfile
 
                     zip_filename = os.path.join(hps.model_dir, f"{hps.model_name}.zip")
                     with zipfile.ZipFile(zip_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
-                        # Добавляем last модель
+                        # Add last model
                         if os.path.exists(last_path):
                             zipf.write(last_path, os.path.basename(last_path))
-                        # Добавляем index
+                        # Add index
                         index_path = os.path.join(hps.model_dir, f"{hps.model_name}.index")
                         if os.path.exists(index_path):
                             zipf.write(index_path, os.path.basename(index_path))
-                    print(f"Файлы модели заархивированы в '{zip_filename}'", flush=True)
+                    print(f"Model files archived to '{zip_filename}'", flush=True)
 
-                print("\nОбучение успешно завершено!", flush=True)
+                print("\nTraining completed successfully!", flush=True)
 
 
 if __name__ == "__main__":
