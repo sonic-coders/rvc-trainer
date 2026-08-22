@@ -34,7 +34,7 @@ tensorboard>=2.15.0
 matplotlib-inline>=0.1.0
 
 # --- Gradio ---
-gradio==4.36.0
+gradio==4.44.1
 gradio_client==1.0.1
 huggingface-hub==0.24.6
 Jinja2==3.1.4
