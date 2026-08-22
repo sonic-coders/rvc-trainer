@@ -10,6 +10,12 @@ from urllib.parse import urlparse
 from subprocess import PIPE, STDOUT, Popen
 import numpy as np
 
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--colab", action="store_true", help="Launch in colab")
+args = parser.parse_args()
+iscolab = args.colab
 
 BASE_ROOT = sys.path.append(os.getcwd())
 
