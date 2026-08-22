@@ -32,3 +32,6 @@ fairseq==0.12.2; python_version<"3.11"
 matplotlib>=3.7.0
 tensorboard>=2.15.0
 matplotlib-inline>=0.1.0
+
+# --- Gradio ---
+git+https://github.com/sonic-coders/gradio-3.git
