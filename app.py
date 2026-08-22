@@ -7,10 +7,8 @@ import shutil
 import traceback
 import sys
 import glob
-from urllib.parse import urlparse
 from subprocess import PIPE, STDOUT, Popen
 import numpy as np
-
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -349,9 +347,22 @@ def download_model_files(training_name):
         if os.path.exists(logs_path):
             files.extend(glob.glob(f'{logs_path}/added_*.index'))
         
+        if not files:
+            return [], f"No model files found for '{training_name}'"
+        
         return files, f"Found {len(files)} files"
     except Exception as e:
         return [], f"Error: {str(e)}"
+
+# Upload handler
+def handle_upload(files, folder):
+    if folder == "":
+        gr.Warning('Please enter a folder name for your dataset')
+        return "Please enter a folder name for your dataset"
+    os.makedirs(folder, exist_ok=True)
+    for f in files:
+        shutil.copy2(f.name, os.path.join(folder, os.path.split(f.name)[1]))
+    return f"Uploaded {len(files)} files to {folder}"
 
 # ========================================================================== #
 # GRADIO UI
@@ -386,24 +397,18 @@ with gr.Blocks(
                         placeholder="/path/to/dataset"
                     )
                     
-                    easy_uploader = gr.Files(
+                    easy_uploader = gr.File(
                         label="Drop your audio files here",
-                        file_types=['audio']
+                        file_types=['audio'],
+                        file_count="multiple"
                     )
                     
-                    # Hidden upload handler
-                    def handle_upload(files, folder):
-                        if folder == "":
-                            gr.Warning('Please enter a folder name for your dataset')
-                            return
-                        os.makedirs(folder, exist_ok=True)
-                        for f in files:
-                            shutil.copy2(f.name, os.path.join(folder, os.path.split(f.name)[1]))
+                    upload_status = gr.Textbox(label="Upload Status", value="", visible=True)
                     
-                    easy_uploader.upload(
+                    easy_uploader.change(
                         fn=handle_upload,
                         inputs=[easy_uploader, dataset_folder],
-                        outputs=[]
+                        outputs=[upload_status]
                     )
                     
                     np7 = gr.Slider(
@@ -582,31 +587,28 @@ with gr.Blocks(
             # Button 1: Process Data
             but1.click(
                 preprocess_dataset,
-                [dataset_folder, training_name, sr2, np7],
-                [info1],
-                api_name="preprocess"
+                inputs=[dataset_folder, training_name, sr2, np7],
+                outputs=[info1]
             )
             
             # Button 2: Extract Features
             but2.click(
                 extract_f0_feature,
-                [gpus6, np7, f0method8, if_f0_3, training_name, version19, gpus_rmvpe],
-                [info2],
-                api_name="extract_features"
+                inputs=[gpus6, np7, f0method8, if_f0_3, training_name, version19, gpus_rmvpe],
+                outputs=[info2]
             )
             
             # Button 3: Train Index
             but4.click(
                 train_index,
-                [training_name, version19],
-                [info3],
-                api_name="train_index"
+                inputs=[training_name, version19],
+                outputs=[info3]
             )
             
             # Button 4: Train Model
             but3.click(
                 click_train,
-                [
+                inputs=[
                     training_name,
                     sr2,
                     if_f0_3,
@@ -614,7 +616,7 @@ with gr.Blocks(
                     save_epoch10,
                     total_epoch11,
                     batch_size12,
-                    "yes",  # if_save_latest13
+                    gr.State("yes"),  # if_save_latest13
                     pretrained_G14,
                     pretrained_D15,
                     gpus16,
@@ -622,14 +624,13 @@ with gr.Blocks(
                     if_save_every_weights18,
                     version19,
                 ],
-                [info3],
-                api_name="train_model"
+                outputs=[info3]
             )
             
             # Button 5: One Click Training
             but5.click(
                 train1key,
-                [
+                inputs=[
                     training_name,
                     sr2,
                     if_f0_3,
@@ -640,7 +641,7 @@ with gr.Blocks(
                     save_epoch10,
                     total_epoch11,
                     batch_size12,
-                    "yes",  # if_save_latest13
+                    gr.State("yes"),  # if_save_latest13
                     pretrained_G14,
                     pretrained_D15,
                     gpus16,
@@ -649,22 +650,21 @@ with gr.Blocks(
                     version19,
                     gpus_rmvpe,
                 ],
-                [info3],
-                api_name="one_click_train"
+                outputs=[info3]
             )
             
             # Download Model
             download_model.click(
                 download_model_files,
-                [training_name],
-                [model_files, info3]
+                inputs=[training_name],
+                outputs=[model_files, info3]
             )
             
             # F0 method change
             f0method8.change(
                 change_f0_method,
-                [f0method8],
-                [gpus_rmvpe]
+                inputs=[f0method8],
+                outputs=[gpus_rmvpe]
             )
         
         # ===================== SETTINGS TAB =====================
