@@ -13,12 +13,21 @@ sys.path.append(os.getcwd())
 from rvc.lib.audio import load_audio
 from rvc.train.preprocess.slicer import Slicer
 
-# Command line argument parsing
-exp_dir = sys.argv[1]  # Directory for saving results
-input_root = sys.argv[2]  # Directory with input audio files
-percentage = float(sys.argv[3])  # Maximum segment length in seconds / Default = 3.0 (from n to 3sec)
-sample_rate = int(sys.argv[4])  # Sample rate to convert the data to / 32000, 40000 and 48000
-normalize = sys.argv[5] == "True"  # Flag to enable/disable normalization
+# Command line argument parsing - only used when run as script
+# When imported as module, these are set by the calling function
+if __name__ == "__main__":
+    exp_dir = sys.argv[1]  # Directory for saving results
+    input_root = sys.argv[2]  # Directory with input audio files
+    percentage = float(sys.argv[3])  # Maximum segment length in seconds / Default = 3.0 (from n to 3sec)
+    sample_rate = int(sys.argv[4])  # Sample rate to convert the data to / 32000, 40000 and 48000
+    normalize = sys.argv[5] == "True"  # Flag to enable/disable normalization
+else:
+    exp_dir = None
+    input_root = None
+    percentage = 3.0
+    sample_rate = 48000
+    normalize = True
+
 num_processes = max(1, os.cpu_count() - 1)  # Number of processes
 
 # Supported audio extensions

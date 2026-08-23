@@ -61,8 +61,13 @@ class Config:
     listen_port: int = 7860
     
     # Path Configuration
-    root_dir: str = f"{BASE_ROOT}/rvc-trainer"
-    save_dir: str = f"{BASE_ROOT}/rvc-trainer/drive/MyDrive/rvc-trainer"
+    # ROOT_DIR is the base directory (works for both local and Colab)
+    # In Colab, this would be /content when using Google Drive mount
+    root_dir: str = BASE_ROOT
+    # Save directory - uses {ROOT_DIR}/drive/MyDrive for Colab compatibility
+    # When running in Colab with Google Drive mounted, this resolves to:
+    # /content/drive/MyDrive/rvc-trainer (or whatever ROOT_DIR points to)
+    save_dir: str = f"{root_dir}/drive/MyDrive/rvc-trainer"
     
     # Default Training Parameters
     default_batch_size: int = 8
@@ -114,6 +119,9 @@ class Config:
 
 # Global configuration instance
 config = Config()
+
+# Convenience alias for backward compatibility
+iscolab = config.iscolab
 
 
 # ========================================================================== #

@@ -6,8 +6,14 @@ import faiss
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 
-exp_dir = str(sys.argv[1])
-index_algorithm = str(sys.argv[2])
+# Command line argument parsing - only used when run as script
+# When imported as module, these are set by the calling function
+if __name__ == "__main__":
+    exp_dir = str(sys.argv[1])
+    index_algorithm = str(sys.argv[2])
+else:
+    exp_dir = None
+    index_algorithm = "KMeans"
 
 try:
     print(f"\nStarting index generation process...")

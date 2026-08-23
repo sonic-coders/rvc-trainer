@@ -21,11 +21,20 @@ sys.path.append(os.getcwd())
 from rvc.lib.audio import load_audio
 from rvc.lib.rmvpe import RMVPE
 
-exp_dir = str(sys.argv[1])  # Directory with data prepared by the `preprocess.py` script
-arch_fairseq = str(sys.argv[2])  # Fairseq architecture / Fairseq, Fairseq2
-f0_method = str(sys.argv[3])  # F0 extraction method / rmvpe, rmvpe+, hpa-rmvpe
-sample_rate = int(sys.argv[4])  # Sampling rate for generating filelist.txt
-include_mutes = int(sys.argv[5])  # Number of mute files per speaker / Default = 2
+# Command line argument parsing - only used when run as script
+# When imported as module, these are set by the calling function
+if __name__ == "__main__":
+    exp_dir = str(sys.argv[1])  # Directory with data prepared by the `preprocess.py` script
+    arch_fairseq = str(sys.argv[2])  # Fairseq architecture / Fairseq, Fairseq2
+    f0_method = str(sys.argv[3])  # F0 extraction method / rmvpe, rmvpe+, hpa-rmvpe
+    sample_rate = int(sys.argv[4])  # Sampling rate for generating filelist.txt
+    include_mutes = int(sys.argv[5])  # Number of mute files per speaker / Default = 2
+else:
+    exp_dir = None
+    arch_fairseq = "Fairseq"
+    f0_method = "rmvpe"
+    sample_rate = 48000
+    include_mutes = 2
 
 
 class DataPreprocessor:
