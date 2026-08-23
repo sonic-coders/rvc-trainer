@@ -1,5 +1,6 @@
 # GUI BY BF667
 # Improved version with better code organization, error handling, and logging
+# Configuration classes moved to configs/config.py for better modularity
 
 import gradio as gr
 import os
@@ -18,148 +19,51 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import argparse
 
-# HuggingFace Hub
+# ========================================================================== #
+# IMPORT CONFIGURATION FROM CONFIG MODULE
+# ========================================================================== #
+
+# Import all configuration from centralized config module
+from configs.config import (
+    # Main configuration
+    Config,
+    config,
+    args,
+    iscolab,
+    BASE_ROOT,
+    
+    # Classes
+    GPUManager,
+    PretrainedModelFinder,
+    
+    # Utility functions
+    setup_logging,
+    validate_model_name,
+    validate_dataset_folder,
+    get_sample_rate,
+    filter_training_output,
+    
+    # Constants
+    UNWANTED_LOG_PATTERNS,
+)
+
+# Initialize logging using config module's function
+logger = setup_logging()
+
+# ========================================================================== #
+# HUGGINGFACE HUB IMPORT
+# ========================================================================== #
+
 try:
     from huggingface_hub import HfApi, create_repo, RepoCard, upload_folder, login, whoami
     HF_AVAILABLE = True
 except ImportError:
     HF_AVAILABLE = False
-    logger_warning = "huggingface_hub not installed. Run: pip install huggingface_hub"
+    logger.warning("huggingface_hub not installed. Run: pip install huggingface_hub")
 
 # ========================================================================== #
-# CONFIGURATION & CONSTANTS
+# GPU DETECTION (using config module's GPUManager)
 # ========================================================================== #
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--colab", action="store_true", help="Launch in colab")
-args = parser.parse_args()
-
-BASE_ROOT = os.getcwd()
-sys.path.append(BASE_ROOT)
-
-@dataclass
-class Config:
-    """Application configuration settings."""
-    n_cpu: int = os.cpu_count() or 4
-    iscolab: bool = args.colab
-    noautoopen: bool = False
-    listen_port: int = 7860
-    root_dir: str = f"{BASE_ROOT}/rvc-trainer"
-    save_dir: str = f"{BASE_ROOT}/rvc-trainer/drive/MyDrive/rvc-trainer"
-    
-    # Default training parameters
-    default_batch_size: int = 8
-    default_epochs: int = 150
-    default_save_epoch: int = 25
-    default_sample_rate: str = "40k"
-    default_f0_method: str = "rmvpe"
-    default_version: str = "v2"
-    
-    # Paths
-    pretrained_dir: str = "assets/pretrained_v2"
-    weights_dir: str = "assets/weights"
-    logs_dir: str = "logs"
-
-config = Config()
-
-# ========================================================================== #
-# LOGGING CONFIGURATION
-# ========================================================================== #
-
-def setup_logging() -> logging.Logger:
-    """Configure application-wide logging."""
-    logger = logging.getLogger("rvc_trainer")
-    logger.setLevel(logging.DEBUG)
-    
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    # File handler for errors
-    try:
-        file_handler = logging.FileHandler("rvc_trainer.log")
-        file_handler.setLevel(logging.ERROR)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    except (IOError, OSError):
-        logger.warning("Could not create log file, continuing without file logging")
-    
-    return logger
-
-logger = setup_logging()
-
-# ========================================================================== #
-# GPU DETECTION
-# ========================================================================== #
-
-class GPUManager:
-    """Manages GPU detection and configuration."""
-    
-    def __init__(self):
-        self._gpus: str = "0"
-        self._gpu_info: str = "No GPU detected"
-        self._cuda_available: bool = False
-        self._device_count: int = 0
-        self._detect_gpus()
-    
-    def _detect_gpus(self) -> None:
-        """Detect available GPUs."""
-        try:
-            import torch
-            self._cuda_available = torch.cuda.is_available()
-            if self._cuda_available:
-                self._device_count = torch.cuda.device_count()
-                self._gpus = ",".join(str(i) for i in range(self._device_count))
-                self._gpu_info = f"Available GPUs: {self._device_count}"
-                logger.info(f"GPU detection successful: {self._gpu_info}")
-            else:
-                logger.warning("CUDA is not available, running on CPU")
-        except ImportError:
-            logger.warning("PyTorch not installed, GPU features disabled")
-        except Exception as e:
-            logger.error(f"Error during GPU detection: {e}")
-    
-    @property
-    def gpus(self) -> str:
-        return self._gpus
-    
-    @property
-    def gpu_info(self) -> str:
-        return self._gpu_info
-    
-    @property
-    def cuda_available(self) -> bool:
-        return self._cuda_available
-    
-    @property
-    def device_count(self) -> int:
-        return self._device_count
-    
-    def validate_gpu_string(self, gpu_str: str) -> Tuple[bool, str]:
-        """
-        Validate GPU string format.
-        
-        Args:
-            gpu_str: GPU identifier string (e.g., "0", "0-1-2")
-            
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        if not gpu_str or not gpu_str.strip():
-            return False, "GPU string cannot be empty"
-        
-        # Accept formats: "0", "0-1-2", "0,1,2"
-        valid_pattern = r"^[\d,\-]+$"
-        if not re.match(valid_pattern, gpu_str.strip()):
-            return False, f"Invalid GPU format: {gpu_str}. Use format like '0' or '0-1-2'"
-        
-        return True, ""
 
 gpu_manager = GPUManager()
 gpus = gpu_manager.gpus
@@ -168,152 +72,14 @@ F0GPUVisible = True
 default_batch_size = config.default_batch_size
 
 # ========================================================================== #
-# UTILITY FUNCTIONS
+# PRETRAINED MODEL FINDER (using config module's class)
 # ========================================================================== #
 
-class PretrainedModelFinder:
-    """Handles finding pretrained model files."""
-    
-    def __init__(self, pretrained_dir: Optional[str] = None):
-        self.pretrained_dir = pretrained_dir or config.pretrained_dir
-        self._cache: Dict[str, List[str]] = {}
-    
-    def _get_pretrained_files(
-        self, 
-        sr_val: str, 
-        letter: str,
-        use_cache: bool = True
-    ) -> List[str]:
-        """
-        Get list of pretrained model files matching criteria.
-        
-        Args:
-            sr_val: Sample rate value (e.g., '40k', '32k', '48k')
-            letter: Model type letter ('G' for Generator, 'D' for Discriminator)
-            use_cache: Whether to use cached results
-            
-        Returns:
-            List of absolute paths to matching .pth files
-        """
-        cache_key = f"{sr_val}_{letter}"
-        
-        if use_cache and cache_key in self._cache:
-            return self._cache[cache_key]
-        
-        try:
-            if not os.path.exists(self.pretrained_dir):
-                logger.warning(f"Pretrained directory not found: {self.pretrained_dir}")
-                return []
-            
-            files = [
-                os.path.abspath(os.path.join(self.pretrained_dir, file))
-                for file in os.listdir(self.pretrained_dir)
-                if file.endswith('.pth') and sr_val in file and letter in file
-            ]
-            
-            self._cache[cache_key] = files
-            return files
-            
-        except OSError as e:
-            logger.error(f"Error reading pretrained directory: {e}")
-            return []
-    
-    def get_generator_choices(self, sr_val: str) -> List[str]:
-        """Get available generator model choices."""
-        return self._get_pretrained_files(sr_val, 'G')
-    
-    def get_discriminator_choices(self, sr_val: str) -> List[str]:
-        """Get available discriminator model choices."""
-        return self._get_pretrained_files(sr_val, 'D')
-    
-    def clear_cache(self) -> None:
-        """Clear the file cache."""
-        self._cache.clear()
-
-
-# Global instance
 pretrained_finder = PretrainedModelFinder()
 
-
-def validate_model_name(name: str) -> Tuple[bool, str]:
-    """
-    Validate model name for allowed characters.
-    
-    Args:
-        name: Model name to validate
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    if not name or not name.strip():
-        return False, "Model name cannot be empty"
-    
-    if not re.match(r"^[a-zA-Z0-9_\-]+$", name.strip()):
-        return False, (
-            f"Name '{name}' contains invalid characters! "
-            "Use only letters, numbers, underscores, and hyphens."
-        )
-    
-    if len(name) > 50:
-        return False, "Model name too long (max 50 characters)"
-    
-    return True, ""
-
-
-def validate_dataset_folder(folder_path: str) -> Tuple[bool, str]:
-    """
-    Validate dataset folder exists and contains files.
-    
-    Args:
-        folder_path: Path to dataset folder
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    if not folder_path or not folder_path.strip():
-        return False, "Dataset folder path cannot be empty"
-    
-    if not os.path.exists(folder_path):
-        return False, f"Folder '{folder_path}' does not exist!"
-    
-    if not os.path.isdir(folder_path):
-        return False, f"'{folder_path}' is not a directory!"
-    
-    try:
-        contents = os.listdir(folder_path)
-        if not contents:
-            return False, f"Folder '{folder_path}' is empty!"
-        
-        # Check for audio files
-        audio_extensions = {'.wav', '.mp3', '.flac', '.ogg', '.m4a'}
-        has_audio = any(
-            Path(f).suffix.lower() in audio_extensions 
-            for f in contents
-        )
-        if not has_audio:
-            logger.warning(f"No common audio files found in {folder_path}")
-            
-    except PermissionError:
-        return False, f"Permission denied accessing '{folder_path}'"
-    
-    return True, ""
-
-
-def get_sample_rate(sr: str, version: str) -> str:
-    """
-    Convert UI sample rate to actual sample rate value.
-    
-    Args:
-        sr: Sample rate from UI ('40k' or '32k')
-        version: Model version ('v1' or 'v2')
-        
-    Returns:
-        Actual sample rate string ('48000' or '32000')
-    """
-    if sr == "40k" or version == "v1":
-        return "48000"
-    return "32000"
-
+# ========================================================================== #
+# SUBPROCESS UTILITIES
+# ========================================================================== #
 
 def run_subprocess_command(
     cmd: str, 
@@ -352,7 +118,7 @@ def run_subprocess_command(
             
         return result.returncode, result.stdout, result.stderr
         
-    except subprocess.TimeoutExpired:
+    except sp.TimeoutExpired:
         logger.error(f"{description} timed out after {timeout} seconds")
         return -1, "", f"Command timed out after {timeout} seconds"
     except Exception as e:
@@ -821,11 +587,11 @@ def change_f0(if_f0: bool, sr: str, version: str) -> Tuple[gr.update, gr.update,
         Tuple of Gradio updates for F0 method, G, and D dropdowns
     """
     if if_f0:
-        f0_choices = ["rmvpe", "hpa-rmvpe"]
-        f0_value = "rmvpe_gpu"
+        f0_choices = config.f0_method_choices_singing
+        f0_value = config.f0_default_singing
     else:
-        f0_choices = ["crepe", "rmvpe", "hpa-rmvpe"]
-        f0_value = "crepe"
+        f0_choices = config.f0_method_choices_non_singing
+        f0_value = config.f0_default_non_singing
     
     sr_val = "40k" if version == "v1" else sr
     g_choices = pretrained_finder.get_generator_choices(sr_val)
@@ -866,7 +632,7 @@ def preprocess_dataset(
         Status message indicating success or failure
     """
     try:
-        # Validate inputs
+        # Validate inputs (using config module functions)
         valid, error_msg = validate_model_name(training_name)
         if not valid:
             return f"❌ Error: {error_msg}"
@@ -880,18 +646,18 @@ def preprocess_dataset(
         os.makedirs(model_dir, exist_ok=True)
         logger.info(f"Created/verified model directory: {model_dir}")
         
-        # Convert parameters
+        # Convert parameters (using config module function)
         sample_rate = get_sample_rate(sr2, "v2")  # Use v2 for preprocessing
-        percentage = 3.0
-        normalize = True
+        percentage = config.default_percentage
+        normalize = config.default_normalize
         
         # Build and execute preprocess command
         preprocess_script = f"{config.root_dir}/rvc/train/preprocess/preprocess.py"
         cmd = (
-            f"python \"{preprocess_script}\" "
-            f"\"{config.save_dir}/{training_name}\" "
-            f"\"{dataset_folder}\" "
-            f"{percentage} {sample_rate} {normalize}"
+            f'python "{preprocess_script}" '
+            f'"{config.save_dir}/{training_name}" '
+            f'"{dataset_folder}" '
+            f'{percentage} {sample_rate} {normalize}'
         )
         
         exit_code, stdout, stderr = run_subprocess_command(cmd, description="preprocessing")
@@ -932,7 +698,7 @@ def extract_f0_feature(
         Status message indicating success or failure
     """
     try:
-        # Convert parameters
+        # Convert parameters (using config module function)
         sample_rate = get_sample_rate("48k" if version19 == "v2" else "32k", version19)
         arch_fairseq = "Fairseq"
         f0_method = f0method8.replace("_gpu", "")
@@ -940,9 +706,9 @@ def extract_f0_feature(
         # Build and execute feature extraction command
         preparing_data_script = f"{config.root_dir}/rvc/train/preprocess/preparing_data.py"
         cmd = (
-            f"python \"{preparing_data_script}\" "
-            f"\"{config.save_dir}/{training_name}\" "
-            f"{arch_fairseq} {f0_method} {sample_rate} 2"
+            f'python "{preparing_data_script}" '
+            f'"{config.save_dir}/{training_name}" '
+            f'{arch_fairseq} {f0_method} {sample_rate} 2'
         )
         
         exit_code, stdout, stderr = run_subprocess_command(cmd, description="feature extraction")
@@ -975,8 +741,8 @@ def train_index(training_name: str, version19: str) -> str:
         # Build and execute index training command
         extract_index_script = f"{config.root_dir}/rvc/train/preprocess/extract_index.py"
         cmd = (
-            f"python \"{extract_index_script}\" "
-            f"\"{config.save_dir}/{training_name}\" {index_algorithm}"
+            f'python "{extract_index_script}" '
+            f'"{config.save_dir}/{training_name}" {index_algorithm}'
         )
         
         exit_code, stdout, stderr = run_subprocess_command(cmd, description="index training")
@@ -995,28 +761,6 @@ def train_index(training_name: str, version19: str) -> str:
 # ========================================================================== #
 # STEP 3: MODEL TRAINING FUNCTIONS
 # ========================================================================== #
-
-# Unwanted log patterns to filter out
-UNWANTED_LOG_PATTERNS = [
-    "All log messages before absl::InitializeLog()",
-    "Unable to register cuDNN factory",
-    "Unable to register cuBLAS factory",
-    "computation placer already registered"
-]
-
-
-def filter_training_output(line: str) -> bool:
-    """
-    Filter unwanted lines from training output.
-    
-    Args:
-        line: Line of output to check
-        
-    Returns:
-        True if line should be included, False otherwise
-    """
-    return not any(pattern in line for pattern in UNWANTED_LOG_PATTERNS)
-
 
 def click_train(
     training_name: str,
@@ -1072,12 +816,12 @@ def click_train(
         Status message with training results or error information
     """
     try:
-        # Validate model name
+        # Validate model name (using config module function)
         valid, error_msg = validate_model_name(training_name)
         if not valid:
             return f"❌ Error: {error_msg}"
         
-        # Validate GPU string
+        # Validate GPU string (using config module's GPUManager)
         valid, error_msg = gpu_manager.validate_gpu_string(gpus16)
         if not valid:
             return f"❌ Error: {error_msg}"
@@ -1162,7 +906,7 @@ def click_train(
             universal_newlines=True,
         )
         
-        # Capture and filter output
+        # Capture and filter output (using config module's filter function)
         output_lines = []
         for line in p.stdout:
             line = line.strip()
@@ -1436,8 +1180,8 @@ with gr.Blocks(
                     
                     sr2 = gr.Radio(
                         label="Sampling Rate",
-                        choices=["40k", "32k"],
-                        value="40k",
+                        choices=config.sample_rate_choices,
+                        value=config.default_sample_rate,
                         interactive=True,
                     )
                     
@@ -1463,8 +1207,8 @@ with gr.Blocks(
                     
                     version19 = gr.Radio(
                         label="Version",
-                        choices=["v1", "v2"],
-                        value="v2",
+                        choices=config.version_choices,
+                        value=config.default_version,
                         interactive=True,
                     )
                     
@@ -1508,7 +1252,7 @@ with gr.Blocks(
                         maximum=1000,
                         step=1,
                         label="Epochs (more = better quality)",
-                        value=150,
+                        value=config.default_epochs,
                         interactive=True,
                     )
                     
@@ -1529,7 +1273,7 @@ with gr.Blocks(
                             maximum=50,
                             step=1,
                             label="Save Frequency (epochs)",
-                            value=25,
+                            value=config.default_save_epoch,
                             interactive=True,
                         )
                         
@@ -1861,14 +1605,14 @@ with gr.Blocks(
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("#### Data Processing")
-                    normalize = gr.Checkbox(label="Normalize Audio", value=True)
-                    create_index = gr.Checkbox(label="Create Index File", value=True)
+                    normalize = gr.Checkbox(label="Normalize Audio", value=config.default_normalize)
+                    create_index = gr.Checkbox(label="Create Index File", value=config.default_create_index)
                     percentage = gr.Slider(
                         minimum=1.0,
                         maximum=5.0,
                         step=0.5,
                         label="Fragment Length (seconds)",
-                        value=3.0,
+                        value=config.default_percentage,
                         interactive=True
                     )
 
@@ -1877,17 +1621,17 @@ with gr.Blocks(
                     optimizer_settings = gr.Dropdown(
                         label="Optimizer",
                         choices=["AdamW", "AdaBelief"],
-                        value="AdamW",
+                        value=config.default_optimizer,
                         interactive=True
                     )
                     vocoder_settings = gr.Dropdown(
                         label="Vocoder",
                         choices=["HiFi-GAN"],
-                        value="HiFi-GAN",
+                        value=config.default_vocoder,
                         interactive=True
                     )
-                    save_half_settings = gr.Checkbox(label="Save with Half Precision", value=True)
-                    save_to_zip_settings = gr.Checkbox(label="Package Model in ZIP", value=True)
+                    save_half_settings = gr.Checkbox(label="Save with Half Precision", value=config.default_save_half)
+                    save_to_zip_settings = gr.Checkbox(label="Package Model in ZIP", value=config.default_save_to_zip)
 
             gr.Markdown("---")
             gr.Markdown("### 📖 Documentation")
