@@ -1,6 +1,6 @@
 # GUI BY BF667
-# Improved version with better code organization, error handling, and logging
-# Configuration classes moved to configs/config.py for better modularity
+# Improved version with direct imports (no subprocess)
+# Configuration classes in configs/config.py
 
 import gradio as gr
 import os
@@ -13,7 +13,6 @@ import logging
 import zipfile
 import tempfile
 from datetime import datetime
-from subprocess import PIPE, STDOUT, Popen, run, CalledProcessError
 from typing import Optional, Tuple, List, Dict, Any, Union
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,6 +61,31 @@ except ImportError:
     logger.warning("huggingface_hub not installed. Run: pip install huggingface_hub")
 
 # ========================================================================== #
+# DIRECT IMPORTS FROM RVC TRAINING MODULES
+# (No more subprocess calls!)
+# ========================================================================== #
+
+logger.info("Importing RVC training modules directly...")
+
+# Import preprocessing module
+from rvc.train.preprocess.preprocess import PreProcess, preprocess_trainset
+
+# Import feature extraction module  
+from rvc.train.preprocess.preparing_data import DataPreprocessor, generate_filelist
+
+# Import index extraction - we'll wrap this since it uses sys.argv
+import faiss
+import numpy as np
+from sklearn.cluster import MiniBatchKMeans
+from multiprocessing import cpu_count
+
+# Import training module
+from rvc.train.train import main as train_main, get_hparams, run as train_run
+
+logger.info("✅ All RVC modules imported successfully!")
+
+
+# ========================================================================== #
 # GPU DETECTION (using config module's GPUManager)
 # ========================================================================== #
 
@@ -77,57 +101,676 @@ default_batch_size = config.default_batch_size
 
 pretrained_finder = PretrainedModelFinder()
 
+
 # ========================================================================== #
-# SUBPROCESS UTILITIES
+# DIRECT PROCESSING FUNCTIONS (No Subprocess!)
 # ========================================================================== #
 
-def run_subprocess_command(
-    cmd: str, 
-    timeout: Optional[int] = None,
-    description: str = "command"
-) -> Tuple[int, str, str]:
+def preprocess_dataset_direct(
+    dataset_folder: str, 
+    training_name: str, 
+    sr2: str, 
+    num_processes: int
+) -> str:
     """
-    Execute a subprocess command with proper error handling.
+    Preprocess dataset by calling PreProcess class directly.
+    
+    This replaces the subprocess call to preprocess.py with a direct
+    function call to the PreProcess class.
     
     Args:
-        cmd: Command string to execute
-        timeout: Optional timeout in seconds
-        description: Description of the command for logging
+        dataset_folder: Path to the dataset folder
+        training_name: Name for the training model
+        sr2: Target sample rate ('40k' or '32k')
+        num_processes: Number of CPU processes for parallel processing
         
     Returns:
-        Tuple of (exit_code, stdout, stderr)
+        Status message indicating success or failure
     """
-    logger.info(f"Executing {description}: {cmd[:100]}...")
+    try:
+        # Validate inputs
+        valid, error_msg = validate_model_name(training_name)
+        if not valid:
+            return f"❌ Error: {error_msg}"
+        
+        valid, error_msg = validate_dataset_folder(dataset_folder)
+        if not valid:
+            return f"❌ Error: {error_msg}"
+        
+        # Create output directory
+        model_dir = f'{config.save_dir}/{training_name}'
+        os.makedirs(model_dir, exist_ok=True)
+        logger.info(f"Created/verified model directory: {model_dir}")
+        
+        # Convert parameters
+        sample_rate = int(get_sample_rate(sr2, "v2"))
+        percentage = config.default_percentage
+        normalize = config.default_normalize
+        
+        logger.info(f"Starting direct preprocessing...")
+        logger.info(f"  Dataset: {dataset_folder}")
+        logger.info(f"  Sample Rate: {sample_rate}Hz")
+        logger.info(f"  Processes: {num_processes}")
+        
+        # Call the preprocessing function DIRECTLY (no subprocess!)
+        try:
+            preprocess_trainset(
+                input_root=dataset_folder,
+                sample_rate=sample_rate,
+                num_processes=num_processes,
+                exp_dir=model_dir,
+                percentage=percentage,
+                normalize=normalize
+            )
+        except FileNotFoundError as e:
+            return f"❌ Error during preprocessing: {str(e)}"
+        except Exception as e:
+            logger.exception("Exception during preprocessing")
+            return f"❌ Error during preprocessing: {str(e)}"
+        
+        logger.info(f"✅ Preprocessing completed for model: {training_name}")
+        return "✅ Data preprocessing completed successfully!"
+        
+    except Exception as e:
+        logger.exception(f"Unexpected exception during preprocessing: {e}")
+        return f"❌ Error during preprocessing: {str(e)}"
+
+
+def extract_features_direct(
+    training_name: str,
+    version19: str,
+    f0_method: str,
+    include_mutes: int = 2
+) -> str:
+    """
+    Extract F0 and features by calling DataPreprocessor directly.
+    
+    This replaces the subprocess call to preparing_data.py with a direct
+    instantiation and method call on DataPreprocessor.
+    
+    Args:
+        training_name: Name of the training model
+        version19: Model version ('v1' or 'v2')
+        f0_method: F0 extraction method ('rmvpe', 'crepe', 'hpa-rmvpe')
+        include_mutes: Number of mute files to include
+        
+    Returns:
+        Status message indicating success or failure
+    """
+    try:
+        model_dir = f'{config.save_dir}/{training_name}'
+        
+        # Validate model directory exists
+        if not os.path.exists(model_dir):
+            return f"❌ Error: Model directory '{model_dir}' does not exist. Run preprocessing first!"
+        
+        # Convert parameters
+        sample_rate = int(get_sample_rate("48k" if version19 == "v2" else "32k", version19))
+        arch_fairseq = "Fairseq"
+        
+        # Normalize f0 method name
+        f0_method_clean = f0_method.replace("_gpu", "").replace("+", "+")
+        
+        logger.info(f"Starting direct feature extraction...")
+        logger.info(f"  Model: {training_name}")
+        logger.info(f"  F0 Method: {f0_method_clean}")
+        logger.info(f"  Sample Rate: {sample_rate}Hz")
+        
+        # Create DataPreprocessor instance and process files DIRECTLY
+        try:
+            preprocessor = DataPreprocessor()
+            preprocessor.process_files()
+            
+            # Generate filelist after feature extraction
+            generate_filelist(model_dir, sample_rate, include_mutes)
+            
+        except FileNotFoundError as e:
+            return f"❌ Error during feature extraction: {str(e)}"
+        except Exception as e:
+            logger.exception("Exception during feature extraction")
+            return f"❌ Error during feature extraction: {str(e)}"
+        
+        logger.info(f"✅ Feature extraction completed for model: {training_name}")
+        return "✅ Feature extraction completed successfully!"
+        
+    except Exception as e:
+        logger.exception(f"Unexpected exception during feature extraction: {e}")
+        return f"❌ Error during feature extraction: {str(e)}"
+
+
+def train_index_direct(
+    training_name: str,
+    version19: str,
+    index_algorithm: str = "Faiss"
+) -> str:
+    """
+    Train index file by calling FAISS directly.
+    
+    This replaces the subprocess call to extract_index.py with
+    direct Python code execution.
+    
+    Args:
+        training_name: Name of the training model
+        version19: Model version (for logging)
+        index_algorithm: Index algorithm to use ('Faiss', 'Auto', 'KMeans')
+        
+    Returns:
+        Status message indicating success or failure
+    """
+    try:
+        model_dir = f'{config.save_dir}/{training_name}'
+        
+        # Validate model directory exists
+        if not os.path.exists(model_dir):
+            return f"❌ Error: Model directory '{model_dir}' does not exist."
+        
+        # Check if features directory exists
+        feature_dir = os.path.join(model_dir, "data", "features")
+        if not os.path.exists(feature_dir):
+            return f"❌ Error: Features directory not found. Run feature extraction first!"
+        
+        model_name = os.path.basename(model_dir)
+        index_filename = f"{model_name}.index"
+        index_filepath = os.path.join(model_dir, index_filename)
+        
+        logger.info(f"Starting direct index generation...")
+        logger.info(f"  Model: {training_name}")
+        logger.info(f"  Algorithm: {index_algorithm}")
+        
+        # Check if index already exists
+        if os.path.exists(index_filepath):
+            logger.info(f"Index already exists: {index_filepath}")
+            return f"✅ Index already exists: {index_filename}"
+        
+        # Load all feature numpy arrays
+        logger.info("Loading feature files...")
+        npys = []
+        listdir_res = sorted(os.listdir(feature_dir))
+        
+        for name in listdir_res:
+            file_path = os.path.join(feature_dir, name)
+            phone = np.load(file_path)
+            npys.append(phone)
+        
+        if not npys:
+            return f"❌ Error: No feature files found in {feature_dir}"
+        
+        # Concatenate all features
+        logger.info(f"Concatenating {len(npys)} feature files...")
+        big_npy = np.concatenate(npys, axis=0)
+        
+        # Shuffle for better indexing
+        big_npy_idx = np.arange(big_npy.shape[0])
+        np.random.shuffle(big_npy_idx)
+        big_npy = big_npy[big_npy_idx]
+        
+        logger.info(f"Total features shape: {big_npy.shape}")
+        
+        # Apply KMeans clustering if too many features
+        if big_npy.shape[0] > 2e5 and index_algorithm in ("Auto", "KMeans"):
+            logger.info("Applying KMeans clustering for large dataset...")
+            big_npy = (
+                MiniBatchKMeans(
+                    n_clusters=10000,
+                    verbose=True,
+                    batch_size=256 * cpu_count(),
+                    compute_labels=False,
+                    init="random",
+                )
+                .fit(big_npy)
+                .cluster_centers_
+            )
+        
+        # Create FAISS index
+        logger.info("Building FAISS index...")
+        n_ivf = min(int(16 * np.sqrt(big_npy.shape[0])), big_npy.shape[0] // 39)
+        
+        index_added = faiss.index_factory(768, f"IVF{n_ivf},Flat")
+        index_ivf_added = faiss.extract_index_ivf(index_added)
+        index_ivf_added.nprobe = 1
+        index_added.train(big_npy)
+        
+        # Add vectors to index in batches
+        batch_size_add = 8192
+        for i in range(0, big_npy.shape[0], batch_size_add):
+            index_added.add(big_npy[i : i + batch_size_add])
+        
+        # Save index
+        faiss.write_index(index_added, index_filepath)
+        
+        logger.info(f"✅ Index saved: {index_filepath}")
+        return f"✅ Index training completed successfully!\n📁 Saved: {index_filename}"
+        
+    except Exception as e:
+        logger.exception(f"Unexpected exception during index training: {e}")
+        return f"❌ Error during index training: {str(e)}"
+
+
+def train_model_direct(
+    training_name: str,
+    sr2: str,
+    total_epoch11: int,
+    batch_size12: int,
+    save_epoch10: int,
+    version19: str,
+    optimizer: str = "AdamW",
+    vocoder: str = "HiFi-GAN",
+    pretrained_G14: Optional[str] = None,
+    pretrained_D15: Optional[str] = None,
+    gpus16: str = "0",
+    save_half: bool = True,
+    save_to_zip: bool = True,
+) -> str:
+    """
+    Train model by calling train.py functions directly.
+    
+    This replaces the subprocess call to train.py with direct
+    function calls to main() and related functions.
+    
+    Args:
+        training_name: Name for the model
+        sr2: Target sample rate
+        total_epoch11: Total number of epochs to train
+        batch_size12: Training batch size
+        save_epoch10: Epoch interval for saving checkpoints
+        version19: Model version
+        optimizer: Optimizer to use
+        vocoder: Vocoder type
+        pretrained_G14: Path to pretrained generator (optional)
+        pretrained_D15: Path to pretrained discriminator (optional)
+        gpus16: GPU identifiers to use
+        save_half: Whether to save in half precision
+        save_to_zip: Whether to package as ZIP
+        
+    Returns:
+        Status message with training results or error information
+    """
+    import torch.multiprocessing as mp
     
     try:
-        result = run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=os.getcwd()
-        )
+        # Validate model name
+        valid, error_msg = validate_model_name(training_name)
+        if not valid:
+            return f"❌ Error: {error_msg}"
         
-        if result.returncode != 0:
-            logger.error(f"{description} failed with exit code {result.returncode}")
-            if result.stderr:
-                logger.error(f"STDERR: {result.stderr[:500]}")
-        else:
-            logger.info(f"{description} completed successfully")
+        # Convert parameters
+        sample_rate = int(get_sample_rate(sr2, version19))
+        
+        # Validate numeric parameters
+        try:
+            total_epochs = int(total_epoch11)
+            batch_size = int(batch_size12)
+            save_epoch_interval = int(save_epoch10)
+        except ValueError as e:
+            return f"❌ Error: Invalid numeric parameter: {e}"
+        
+        # Validate ranges
+        if total_epochs < 1:
+            return "❌ Error: Total epochs must be at least 1"
+        if batch_size < 1:
+            return "❌ Error: Batch size must be at least 1"
+        if save_epoch_interval < 1:
+            return "❌ Error: Save epoch interval must be at least 1"
+        
+        # Log configuration
+        logger.info("=" * 50)
+        logger.info("Starting Direct Training Session")
+        logger.info("=" * 50)
+        logger.info(f"Model: {training_name}")
+        logger.info(f"Version: {version19}")
+        logger.info(f"Sample Rate: {sample_rate}Hz")
+        logger.info(f"Epochs: {total_epochs}")
+        logger.info(f"Batch Size: {batch_size}")
+        logger.info(f"Save Every: {save_epoch_interval} epochs")
+        logger.info(f"Optimizer: {optimizer}")
+        logger.info(f"Vocoder: {vocoder}")
+        logger.info(f"GPUs: {gpus16}")
+        logger.info("=" * 50)
+        
+        # Set up sys.argv for get_hparams() compatibility
+        original_argv = sys.argv.copy()
+        sys.argv = [
+            'train.py',
+            '--experiment_dir', config.save_dir,
+            '--model_name', training_name,
+            '--total_epoch', str(total_epochs),
+            '--save_every_epoch', str(save_epoch_interval),
+            '--batch_size', str(batch_size),
+            '--sample_rate', str(sample_rate),
+            '--vocoder', vocoder,
+            '--optimizer', optimizer,
+            '--gpus', gpus16,
+            '--save_to_zip', str(save_to_zip).lower(),
+            '--save_half', str(save_half).lower(),
+        ]
+        
+        # Add pretrained paths if provided
+        if pretrained_G14:
+            sys.argv.extend(['--pretrain_g', pretrained_G14])
+        if pretrained_D15:
+            sys.argv.extend(['--pretrain_d', pretrained_D15])
+        
+        # Run training DIRECTLY (no subprocess!)
+        logger.info("Launching training process directly...")
+        
+        try:
+            # Set multiprocessing start method
+            mp.set_start_method("spawn", force=True)
             
-        return result.returncode, result.stdout, result.stderr
-        
-    except sp.TimeoutExpired:
-        logger.error(f"{description} timed out after {timeout} seconds")
-        return -1, "", f"Command timed out after {timeout} seconds"
+            # Call main() from train.py directly
+            train_main()
+            
+            success_msg = (
+                f"✅ Training completed successfully!\n\n"
+                f"📦 Model: {training_name}\n"
+                f"⏱️ Epochs: {total_epochs}\n"
+                f"📊 Batch Size: {batch_size}\n"
+                f"🎵 Sample Rate: {sample_rate}Hz\n"
+                f"🔧 Optimizer: {optimizer}\n"
+                f"💾 Checkpoints saved every: {save_epoch_interval} epochs"
+            )
+            
+            logger.info(success_msg)
+            return success_msg
+            
+        except SystemExit as e:
+            # train_main() calls sys.exit(0) on success
+            if e.code == 0 or e.code is None:
+                success_msg = f"✅ Training completed for model: {training_name}"
+                logger.info(success_msg)
+                return success_msg
+            else:
+                error_msg = f"❌ Training exited with code: {e.code}"
+                logger.error(error_msg)
+                return error_msg
+                
+        except Exception as e:
+            logger.exception(f"Error during direct training: {e}")
+            
+            # Save error log
+            try:
+                error_log_path = f"{config.save_dir}/{training_name}/error_log.txt"
+                os.makedirs(os.path.dirname(error_log_path), exist_ok=True)
+                with open(error_log_path, "w") as f:
+                    f.write(f"Training failed:\n\n{traceback.format_exc()}")
+            except Exception:
+                pass
+            
+            return f"❌ Error during training: {str(e)}"
+            
+        finally:
+            # Restore original argv
+            sys.argv = original_argv
+            
     except Exception as e:
-        logger.error(f"Error executing {description}: {e}")
-        return -1, "", str(e)
+        logger.exception(f"Unexpected exception in train_model_direct: {e}")
+        return f"❌ Error during training: {str(e)}"
 
 
-# Import subprocess module properly
-import subprocess as sp
+# ========================================================================== #
+# UI CALLBACK FUNCTIONS (Updated to use direct calls)
+# ========================================================================== #
+
+def change_f0_method(f0_method: str) -> str:
+    """Update GPU visibility based on F0 method selection."""
+    if f0_method == "rmvpe_gpu":
+        return gpus
+    return "0"
+
+
+def change_sr2(sr: str, if_f0: str, version: str) -> Tuple[gr.update, gr.update]:
+    """Update pretrained model choices when sample rate changes."""
+    sr2_val = "40k" if version == "v1" else sr
+    
+    g_choices = pretrained_finder.get_generator_choices(sr2_val)
+    d_choices = pretrained_finder.get_discriminator_choices(sr2_val)
+    
+    return (
+        gr.update(choices=g_choices, value=g_choices[0] if g_choices else ''),
+        gr.update(choices=d_choices, value=d_choices[0] if d_choices else '')
+    )
+
+
+def change_version19(sr: str, if_f0: str, version: str) -> Tuple[gr.update, gr.update, gr.update]:
+    """Handle version change and update related options."""
+    if version == "v1":
+        sr2_val = "40k"
+        sr_update = gr.update(value="40k", visible=False)
+    else:
+        sr2_val = sr
+        sr_update = gr.update(visible=True)
+    
+    g_choices = pretrained_finder.get_generator_choices(sr2_val)
+    d_choices = pretrained_finder.get_discriminator_choices(sr2_val)
+    
+    return (
+        gr.update(choices=g_choices, value=g_choices[0] if g_choices else ''),
+        gr.update(choices=d_choices, value=d_choices[0] if d_choices else ''),
+        sr_update
+    )
+
+
+def change_f0(if_f0: bool, sr: str, version: str) -> Tuple[gr.update, gr.update, gr.update]:
+    """Update F0 method choices based on singing mode."""
+    if if_f0:
+        f0_choices = config.f0_method_choices_singing
+        f0_value = config.f0_default_singing
+    else:
+        f0_choices = config.f0_method_choices_non_singing
+        f0_value = config.f0_default_non_singing
+    
+    sr_val = "40k" if version == "v1" else sr
+    g_choices = pretrained_finder.get_generator_choices(sr_val)
+    d_choices = pretrained_finder.get_discriminator_choices(sr_val)
+    
+    return (
+        gr.update(choices=f0_choices, value=f0_value),
+        gr.update(choices=g_choices, value=g_choices[0] if g_choices else ''),
+        gr.update(choices=d_choices, value=d_choices[0] if d_choices else '')
+    )
+
+
+# ========================================================================== #
+# STEP FUNCTIONS (Now using direct imports!)
+# ========================================================================== #
+
+def preprocess_dataset(dataset_folder, training_name, sr2, np7):
+    """UI callback for Step 1: Process Data (now direct call)."""
+    return preprocess_dataset_direct(
+        dataset_folder=dataset_folder,
+        training_name=training_name,
+        sr2=sr2,
+        num_processes=int(np7)
+    )
+
+
+def extract_f0_feature(gpus6, np7, f0method8, if_f0_3, training_name, version19, gpus_rmvpe):
+    """UI callback for Step 2: Extract Features (now direct call)."""
+    # Set CUDA device for feature extraction
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpus_rmvpe if f0method8 == "rmvpe_gpu" else "0"
+    
+    return extract_features_direct(
+        training_name=training_name,
+        version19=version19,
+        f0_method=f0method8.replace("_gpu", ""),
+        include_mutes=2
+    )
+
+
+def train_index(training_name, version19):
+    """UI callback for Step 3: Train Index (now direct call)."""
+    return train_index_direct(
+        training_name=training_name,
+        version19=version19,
+        index_algorithm="Faiss"
+    )
+
+
+def click_train(
+    training_name,
+    sr2,
+    if_f0_3,
+    spk_id5,
+    save_epoch10,
+    total_epoch11,
+    batch_size12,
+    if_save_latest13,
+    pretrained_G14,
+    pretrained_D15,
+    gpus16,
+    if_cache_gpu17,
+    if_save_every_weights18,
+    version19,
+    # Additional parameters from Settings tab
+    optimizer="AdamW",
+    vocoder="HiFi-GAN",
+    save_half=True,
+    save_to_zip=True,
+):
+    """UI callback for Step 4: Train Model (now direct call)."""
+    return train_model_direct(
+        training_name=training_name,
+        sr2=sr2,
+        total_epoch11=total_epoch11,
+        batch_size12=batch_size12,
+        save_epoch10=save_epoch10,
+        version19=version19,
+        optimizer=optimizer,
+        vocoder=vocoder,
+        pretrained_G14=pretrained_G14,
+        pretrained_D15=pretrained_D15,
+        gpus16=gpus16,
+        save_half=save_half,
+        save_to_zip=save_to_zip,
+    )
+
+
+def train1key(
+    training_name,
+    sr2,
+    if_f0_3,
+    dataset_folder,
+    spk_id5,
+    np7,
+    f0method8,
+    save_epoch10,
+    total_epoch11,
+    batch_size12,
+    if_save_latest13,
+    pretrained_G14,
+    pretrained_D15,
+    gpus16,
+    if_cache_gpu17,
+    if_save_every_weights18,
+    version19,
+    gpus_rmvpe,
+):
+    """One-click training pipeline with direct imports."""
+    logger.info(f"Starting one-click training pipeline for: {training_name}")
+    
+    results = []
+    
+    # Step 1: Preprocess (direct)
+    logger.info("Step 1/4: Preprocessing dataset...")
+    result1 = preprocess_dataset(dataset_folder, training_name, sr2, np7)
+    results.append(result1)
+    if "❌" in result1:
+        logger.error(f"Pipeline stopped at preprocessing: {result1}")
+        return result1
+    
+    # Step 2: Extract features (direct)
+    logger.info("Step 2/4: Extracting features...")
+    result2 = extract_f0_feature(gpus16, np7, f0method8, if_f0_3, training_name, version19, gpus_rmvpe)
+    results.append(result2)
+    if "❌" in result2:
+        logger.error(f"Pipeline stopped at feature extraction: {result2}")
+        return f"{result1}\n\n{result2}"
+    
+    # Step 3: Train index (direct)
+    logger.info("Step 3/4: Training index...")
+    result3 = train_index(training_name, version19)
+    results.append(result3)
+    if "❌" in result3:
+        logger.error(f"Pipeline stopped at index training: {result3}")
+        return f"{result1}\n\n{result2}\n\n{result3}"
+    
+    # Step 4: Train model (direct)
+    logger.info("Step 4/4: Training model...")
+    result4 = click_train(
+        training_name, sr2, if_f0_3, spk_id5, save_epoch10, total_epoch11,
+        batch_size12, if_save_latest13, pretrained_G14, pretrained_D15,
+        gpus16, if_cache_gpu17, if_save_every_weights18, version19,
+    )
+    results.append(result4)
+    
+    final_message = "✅ All steps completed!\n\n" + "\n\n".join(results)
+    logger.info("One-click training pipeline completed!")
+    
+    return final_message
+
+
+def download_model_files(training_name):
+    """Find and list downloadable model files."""
+    try:
+        weights_path = f'{config.weights_dir}/{training_name}'
+        logs_path = f'{config.logs_dir}/{training_name}'
+        
+        files = []
+        
+        if os.path.exists(weights_path):
+            try:
+                files.extend([
+                    os.path.join(weights_path, f) 
+                    for f in os.listdir(weights_path) 
+                    if f.endswith('.pth')
+                ])
+            except PermissionError:
+                logger.warning(f"Permission denied reading: {weights_path}")
+        
+        if os.path.exists(logs_path):
+            try:
+                files.extend(glob.glob(f'{logs_path}/added_*.index'))
+            except PermissionError:
+                logger.warning(f"Permission denied reading: {logs_path}")
+        
+        if not files:
+            msg = f"No model files found for '{training_name}'"
+            logger.warning(msg)
+            return [], msg
+        
+        logger.info(f"Found {len(files)} model files for {training_name}")
+        return files, f"Found {len(files)} files"
+        
+    except Exception as e:
+        logger.exception(f"Error finding model files: {e}")
+        return [], f"Error: {str(e)}"
+
+
+def handle_upload(files, folder):
+    """Handle file upload to dataset folder."""
+    if not folder or not folder.strip():
+        gr.Warning('Please enter a folder name for your dataset')
+        return "Please enter a folder name for your dataset"
+    
+    try:
+        os.makedirs(folder, exist_ok=True)
+        uploaded_count = 0
+        
+        for f in files:
+            if hasattr(f, 'name') and os.path.exists(f.name):
+                dest = os.path.join(folder, os.path.basename(f.name))
+                shutil.copy2(f.name, dest)
+                uploaded_count += 1
+            else:
+                logger.warning(f"Invalid file object: {f}")
+        
+        msg = f"Uploaded {uploaded_count} files to {folder}"
+        logger.info(msg)
+        return msg
+        
+    except Exception as e:
+        logger.exception(f"Error uploading files: {e}")
+        return f"❌ Error uploading files: {str(e)}"
 
 
 # ========================================================================== #
@@ -178,15 +821,7 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
         self._authenticated: bool = False
     
     def authenticate(self, api_key: str) -> Tuple[bool, str]:
-        """
-        Authenticate with HuggingFace using API key.
-        
-        Args:
-            api_key: HuggingFace API token
-            
-        Returns:
-            Tuple of (success, message)
-        """
+        """Authenticate with HuggingFace using API key."""
         if not HF_AVAILABLE:
             return False, "huggingface_hub library is not installed. Run: pip install huggingface_hub"
         
@@ -194,7 +829,6 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
             return False, "API Key cannot be empty"
         
         try:
-            # Validate API key by getting user info
             self.api = HfApi(token=api_key.strip())
             user_info = whoami(token=api_key.strip())
             self._authenticated = True
@@ -214,46 +848,28 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
                 return False, f"❌ Authentication failed: {error_msg}"
     
     def find_model_zip(self, model_name: str) -> Tuple[Optional[str], str]:
-        """
-        Find the zip file for a trained model.
-        
-        Search locations:
-        1. assets/weights/{model_name}/
-        2. logs/{model_name}/
-        3. {save_dir}/{model_name}/
-        
-        Args:
-            model_name: Name of the trained model
-            
-        Returns:
-            Tuple of (zip_path or None, message)
-        """
+        """Find the zip file for a trained model."""
         search_paths = [
             f'{config.weights_dir}/{model_name}',
             f'{config.logs_dir}/{model_name}',
             f'{config.save_dir}/{model_name}',
         ]
         
-        # Search for .zip files first
         for search_path in search_paths:
             if os.path.exists(search_path):
                 zip_files = glob.glob(f'{search_path}/*.zip')
                 if zip_files:
-                    # Return the most recent zip file
                     latest_zip = max(zip_files, key=os.path.getmtime)
                     msg = f"Found zip: {os.path.basename(latest_zip)}"
                     logger.info(msg)
                     return latest_zip, msg
         
-        # If no zip found, check if we can create one from the folder
         for search_path in search_paths:
             if os.path.exists(search_path) and os.listdir(search_path):
-                # Found folder with files but no zip - we'll zip it during upload
                 msg = f"Will create zip from: {search_path}"
                 logger.info(msg)
                 return search_path, msg
         
-        # No files found anywhere
         error_msg = (
             f"No model files found for '{model_name}'. "
             f"Searched in: {', '.join(search_paths)}"
@@ -268,19 +884,7 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
         version: str = "v2",
         files_list: Optional[List[str]] = None
     ) -> str:
-        """
-        Generate README content for the model repository.
-        
-        Args:
-            model_name: Name of the model
-            sample_rate: Sample rate used
-            version: RVC version
-            files_list: List of files included
-            
-        Returns:
-            Formatted README content
-        """
-        # Format files list
+        """Generate README content for the model repository."""
         if files_list:
             files_md = "\n".join([f"- `{f}`" for f in files_list])
         else:
@@ -300,31 +904,18 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
         private: bool = False,
         token: Optional[str] = None
     ) -> Tuple[bool, str]:
-        """
-        Ensure repository exists, create if it doesn't.
-        
-        Args:
-            repo_id: Full repo ID (username/repo_name)
-            private: Whether repo should be private
-            token: HF API token
-            
-        Returns:
-            Tuple of (success, message)
-        """
+        """Ensure repository exists, create if it doesn't."""
         if not self.api:
             return False, "Not authenticated. Please enter API key first."
         
         try:
-            # Check if repo exists
             try:
                 repo_info = self.api.repo_info(repo_id=repo_id, token=token)
                 logger.info(f"Repository exists: {repo_id}")
                 return True, f"✅ Repository already exists: {repo_id}"
             except Exception:
-                # Repo doesn't exist, create it
                 pass
             
-            # Create new repository
             logger.info(f"Creating new repository: {repo_id}")
             create_repo(
                 repo_id=repo_id,
@@ -349,48 +940,23 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
         version: str = "v2",
         private: bool = False
     ) -> str:
-        """
-        Upload model to HuggingFace.
-        
-        Complete workflow:
-        1. Authenticate
-        2. Find/create zip file
-        3. Ensure repo exists
-        4. Create README
-        5. Upload files
-        
-        Args:
-            model_name: Name of the trained model
-            repo_id: Target HF repository (username/repo_name)
-            api_key: HuggingFace API key
-            sample_rate: Sample rate of the model
-            version: RVC version
-            private: Whether to make repo private
-            
-        Returns:
-            Status message with result or error
-        """
-        # Step 1: Authenticate
+        """Upload model to HuggingFace."""
         success, msg = self.authenticate(api_key)
         if not success:
             return msg
         
-        # Step 2: Find model files
         zip_path, msg = self.find_model_zip(model_name)
         if zip_path is None:
             return f"❌ {msg}"
         
         logger.info(f"Model path: {zip_path}")
         
-        # Step 3: Ensure repository exists
         success, msg = self.ensure_repo_exists(repo_id, private, api_key.strip())
         if not success:
             return msg
         
-        # Step 4 & 5: Prepare and upload
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
-                # If it's a folder, zip it first
                 if os.path.isdir(zip_path):
                     zip_filename = f"{model_name}.zip"
                     zip_filepath = os.path.join(temp_dir, zip_filename)
@@ -406,12 +972,10 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
                     upload_dir = temp_dir
                     files_in_upload = [zip_filename]
                 else:
-                    # It's already a zip file, copy to temp dir
                     shutil.copy2(zip_path, temp_dir)
                     upload_dir = temp_dir
                     files_in_upload = [os.path.basename(zip_path)]
                 
-                # Create README
                 readme_content = self.create_readme_content(
                     model_name=model_name,
                     sample_rate=sample_rate,
@@ -422,12 +986,10 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
                 with open(readme_path, 'w', encoding='utf-8') as f:
                     f.write(readme_content)
                 
-                # Upload to HuggingFace
                 logger.info(f"Uploading to {repo_id}...")
                 
                 api = HfApi(token=api_key.strip())
                 
-                # Upload all files in temp directory
                 upload_result = api.upload_folder(
                     folder_path=temp_dir,
                     repo_id=repo_id,
@@ -452,33 +1014,20 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
     
     @staticmethod
     def validate_repo_id(repo_id: str) -> Tuple[bool, str]:
-        """
-        Validate HuggingFace repository ID format.
-        
-        Valid format: username/repo-name
-        
-        Args:
-            repo_id: Repository ID to validate
-            
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
+        """Validate HuggingFace repository ID format."""
         if not repo_id or not repo_id.strip():
             return False, "Repository ID cannot be empty"
         
         repo_id = repo_id.strip()
         
-        # Must contain exactly one /
         if repo_id.count('/') != 1:
             return False, 'Repository ID must be in format: "username/repo-name"'
         
         username, repo_name = repo_id.split('/')
         
-        # Validate username
         if not username or not re.match(r'^[a-zA-Z0-9_-]+$', username):
             return False, "Invalid username format. Use only letters, numbers, hyphens, underscores."
         
-        # Validate repo name
         if not repo_name or not re.match(r'^[a-zA-Z0-9._-]+$', repo_name):
             return False, "Invalid repository name format. Use only letters, numbers, dots, hyphens, underscores."
         
@@ -490,636 +1039,6 @@ For usage instructions, please refer to the [RVC documentation](https://github.c
 
 # Global instance
 hf_uploader = HuggingFaceUploader()
-
-# ========================================================================== #
-# UI CALLBACK FUNCTIONS
-# ========================================================================== #
-
-def change_f0_method(f0_method: str) -> str:
-    """
-    Update GPU visibility based on F0 method selection.
-    
-    Args:
-        f0_method: Selected F0 extraction method
-        
-    Returns:
-        GPU string for the method
-    """
-    if f0_method == "rmvpe_gpu":
-        return gpus
-    return "0"
-
-
-def change_sr2(sr: str, if_f0: str, version: str) -> Tuple[gr.update, gr.update]:
-    """
-    Update pretrained model choices when sample rate changes.
-    
-    Args:
-        sr: Selected sample rate
-        if_f0: Whether F0 is enabled
-        version: Model version
-        
-    Returns:
-        Tuple of Gradio updates for G and D dropdowns
-    """
-    sr2_val = "40k" if version == "v1" else sr
-    
-    g_choices = pretrained_finder.get_generator_choices(sr2_val)
-    d_choices = pretrained_finder.get_discriminator_choices(sr2_val)
-    
-    return (
-        gr.update(
-            choices=g_choices, 
-            value=g_choices[0] if g_choices else ''
-        ),
-        gr.update(
-            choices=d_choices, 
-            value=d_choices[0] if d_choices else ''
-        )
-    )
-
-
-def change_version19(sr: str, if_f0: str, version: str) -> Tuple[gr.update, gr.update, gr.update]:
-    """
-    Handle version change and update related options.
-    
-    Args:
-        sr: Selected sample rate
-        if_f0: Whether F0 is enabled
-        version: Model version ('v1' or 'v2')
-        
-    Returns:
-        Tuple of Gradio updates for G, D dropdowns, and SR visibility
-    """
-    if version == "v1":
-        sr2_val = "40k"
-        sr_update = gr.update(value="40k", visible=False)
-    else:
-        sr2_val = sr
-        sr_update = gr.update(visible=True)
-    
-    g_choices = pretrained_finder.get_generator_choices(sr2_val)
-    d_choices = pretrained_finder.get_discriminator_choices(sr2_val)
-    
-    return (
-        gr.update(
-            choices=g_choices, 
-            value=g_choices[0] if g_choices else ''
-        ),
-        gr.update(
-            choices=d_choices, 
-            value=d_choices[0] if d_choices else ''
-        ),
-        sr_update
-    )
-
-
-def change_f0(if_f0: bool, sr: str, version: str) -> Tuple[gr.update, gr.update, gr.update]:
-    """
-    Update F0 method choices based on singing mode.
-    
-    Args:
-        if_f0: Whether model will be used for singing
-        sr: Selected sample rate
-        version: Model version
-        
-    Returns:
-        Tuple of Gradio updates for F0 method, G, and D dropdowns
-    """
-    if if_f0:
-        f0_choices = config.f0_method_choices_singing
-        f0_value = config.f0_default_singing
-    else:
-        f0_choices = config.f0_method_choices_non_singing
-        f0_value = config.f0_default_non_singing
-    
-    sr_val = "40k" if version == "v1" else sr
-    g_choices = pretrained_finder.get_generator_choices(sr_val)
-    d_choices = pretrained_finder.get_discriminator_choices(sr_val)
-    
-    return (
-        gr.update(choices=f0_choices, value=f0_value),
-        gr.update(choices=g_choices, value=g_choices[0] if g_choices else ''),
-        gr.update(choices=d_choices, value=d_choices[0] if d_choices else '')
-    )
-
-
-# ========================================================================== #
-# STEP 2: DATA PROCESSING FUNCTIONS
-# ========================================================================== #
-
-def preprocess_dataset(
-    dataset_folder: str, 
-    training_name: str, 
-    sr2: str, 
-    np7: float
-) -> str:
-    """
-    Preprocess dataset for training.
-    
-    This function handles:
-    - Model name validation
-    - Dataset folder validation
-    - Audio segmentation and resampling
-    
-    Args:
-        dataset_folder: Path to the dataset folder
-        training_name: Name for the training model
-        sr2: Target sample rate ('40k' or '32k')
-        np7: Number of CPU processes for pitch extraction
-        
-    Returns:
-        Status message indicating success or failure
-    """
-    try:
-        # Validate inputs (using config module functions)
-        valid, error_msg = validate_model_name(training_name)
-        if not valid:
-            return f"❌ Error: {error_msg}"
-        
-        valid, error_msg = validate_dataset_folder(dataset_folder)
-        if not valid:
-            return f"❌ Error: {error_msg}"
-        
-        # Create output directory
-        model_dir = f'{config.save_dir}/{training_name}'
-        os.makedirs(model_dir, exist_ok=True)
-        logger.info(f"Created/verified model directory: {model_dir}")
-        
-        # Convert parameters (using config module function)
-        sample_rate = get_sample_rate(sr2, "v2")  # Use v2 for preprocessing
-        percentage = config.default_percentage
-        normalize = config.default_normalize
-        
-        # Build and execute preprocess command
-        preprocess_script = f"{config.root_dir}/rvc/train/preprocess/preprocess.py"
-        cmd = (
-            f'python "{preprocess_script}" '
-            f'"{config.save_dir}/{training_name}" '
-            f'"{dataset_folder}" '
-            f'{percentage} {sample_rate} {normalize}'
-        )
-        
-        exit_code, stdout, stderr = run_subprocess_command(cmd, description="preprocessing")
-        
-        if exit_code != 0:
-            return f"❌ Error during preprocessing! Exit code: {exit_code}\n{stderr[:200]}"
-        
-        logger.info(f"Preprocessing completed for model: {training_name}")
-        return "✅ Data preprocessing completed successfully!"
-        
-    except Exception as e:
-        logger.exception(f"Exception during preprocessing: {e}")
-        return f"❌ Error during preprocessing: {str(e)}"
-
-
-def extract_f0_feature(
-    gpus6: str, 
-    np7: float, 
-    f0method8: str, 
-    if_f0_3: bool, 
-    training_name: str, 
-    version19: str,
-    gpus_rmvpe: str
-) -> str:
-    """
-    Extract F0 (pitch) and feature vectors from preprocessed data.
-    
-    Args:
-        gpus6: GPU identifiers for processing
-        np7: Number of CPU processes
-        f0method8: F0 extraction method
-        if_f0_3: Whether F0 extraction is enabled
-        training_name: Name of the training model
-        version19: Model version
-        gpus_rmvpe: GPU identifiers for RMVPE
-        
-    Returns:
-        Status message indicating success or failure
-    """
-    try:
-        # Convert parameters (using config module function)
-        sample_rate = get_sample_rate("48k" if version19 == "v2" else "32k", version19)
-        arch_fairseq = "Fairseq"
-        f0_method = f0method8.replace("_gpu", "")
-        
-        # Build and execute feature extraction command
-        preparing_data_script = f"{config.root_dir}/rvc/train/preprocess/preparing_data.py"
-        cmd = (
-            f'python "{preparing_data_script}" '
-            f'"{config.save_dir}/{training_name}" '
-            f'{arch_fairseq} {f0_method} {sample_rate} 2'
-        )
-        
-        exit_code, stdout, stderr = run_subprocess_command(cmd, description="feature extraction")
-        
-        if exit_code != 0:
-            return f"❌ Error during feature extraction! Exit code: {exit_code}\n{stderr[:200]}"
-        
-        logger.info(f"Feature extraction completed for model: {training_name}")
-        return "✅ Feature extraction completed successfully!"
-        
-    except Exception as e:
-        logger.exception(f"Exception during feature extraction: {e}")
-        return f"❌ Error during feature extraction: {str(e)}"
-
-
-def train_index(training_name: str, version19: str) -> str:
-    """
-    Train the index file for fast similarity search during inference.
-    
-    Args:
-        training_name: Name of the training model
-        version19: Model version (affects index algorithm choice)
-        
-    Returns:
-        Status message indicating success or failure
-    """
-    try:
-        index_algorithm = "Faiss"
-        
-        # Build and execute index training command
-        extract_index_script = f"{config.root_dir}/rvc/train/preprocess/extract_index.py"
-        cmd = (
-            f'python "{extract_index_script}" '
-            f'"{config.save_dir}/{training_name}" {index_algorithm}'
-        )
-        
-        exit_code, stdout, stderr = run_subprocess_command(cmd, description="index training")
-        
-        if exit_code != 0:
-            return f"❌ Error during index training! Exit code: {exit_code}\n{stderr[:200]}"
-        
-        logger.info(f"Index training completed for model: {training_name}")
-        return "✅ Index training completed successfully!"
-        
-    except Exception as e:
-        logger.exception(f"Exception during index training: {e}")
-        return f"❌ Error during index training: {str(e)}"
-
-
-# ========================================================================== #
-# STEP 3: MODEL TRAINING FUNCTIONS
-# ========================================================================== #
-
-def click_train(
-    training_name: str,
-    sr2: str,
-    if_f0_3: bool,
-    spk_id5: int,
-    save_epoch10: int,
-    total_epoch11: int,
-    batch_size12: int,
-    if_save_latest13: str,
-    pretrained_G14: Optional[str],
-    pretrained_D15: Optional[str],
-    gpus16: str,
-    if_cache_gpu17: str,
-    if_save_every_weights18: str,
-    version19: str,
-    # Additional parameters from Settings tab
-    optimizer: str = "AdamW",
-    vocoder: str = "HiFi-GAN",
-    save_half: bool = True,
-    save_to_zip: bool = True,
-) -> str:
-    """
-    Execute model training with the specified parameters.
-    
-    This is the main training function that:
-    - Validates all input parameters
-    - Builds the training command
-    - Monitors training progress
-    - Handles errors gracefully
-    
-    Args:
-        training_name: Name for the model
-        sr2: Target sample rate
-        if_f0_3: Whether F0 is enabled
-        spk_id5: Speaker ID
-        save_epoch10: Epoch interval for saving checkpoints
-        total_epoch11: Total number of epochs to train
-        batch_size12: Training batch size
-        if_save_latest13: Whether to save latest checkpoint
-        pretrained_G14: Path to pretrained generator (optional)
-        pretrained_D15: Path to pretrained discriminator (optional)
-        gpus16: GPU identifiers to use
-        if_cache_gpu17: Whether to cache dataset on GPU
-        if_save_every_weights18: Whether to save weights at each checkpoint
-        version19: Model version
-        optimizer: Optimizer to use (from Settings)
-        vocoder: Vocoder type (from Settings)
-        save_half: Whether to save in half precision (from Settings)
-        save_to_zip: Whether to package as ZIP (from Settings)
-        
-    Returns:
-        Status message with training results or error information
-    """
-    try:
-        # Validate model name (using config module function)
-        valid, error_msg = validate_model_name(training_name)
-        if not valid:
-            return f"❌ Error: {error_msg}"
-        
-        # Validate GPU string (using config module's GPUManager)
-        valid, error_msg = gpu_manager.validate_gpu_string(gpus16)
-        if not valid:
-            return f"❌ Error: {error_msg}"
-        
-        # Convert and validate parameters
-        sample_rate = get_sample_rate(sr2, version19)
-        
-        try:
-            save_epoch_interval = int(save_epoch10)
-            total_epochs = int(total_epoch11)
-            batch_size = int(batch_size12)
-            spk_id = int(spk_id5)
-        except ValueError as e:
-            return f"❌ Error: Invalid numeric parameter: {e}"
-        
-        # Validate parameter ranges
-        if total_epochs < 1:
-            return "❌ Error: Total epochs must be at least 1"
-        if batch_size < 1:
-            return "❌ Error: Batch size must be at least 1"
-        if save_epoch_interval < 1:
-            return "❌ Error: Save epoch interval must be at least 1"
-        
-        # Log training configuration
-        logger.info("=" * 50)
-        logger.info("Starting Training Session")
-        logger.info("=" * 50)
-        logger.info(f"Model: {training_name}")
-        logger.info(f"Version: {version19}")
-        logger.info(f"Sample Rate: {sample_rate}Hz")
-        logger.info(f"Epochs: {total_epochs}")
-        logger.info(f"Batch Size: {batch_size}")
-        logger.info(f"Save Every: {save_epoch_interval} epochs")
-        logger.info(f"Optimizer: {optimizer}")
-        logger.info(f"Vocoder: {vocoder}")
-        logger.info(f"GPUs: {gpus16}")
-        logger.info("=" * 50)
-        
-        # Handle pretrained models
-        pretrained_G = pretrained_G14 if pretrained_G14 else None
-        pretrained_D = pretrained_D15 if pretrained_D15 else None
-        
-        # Validate pretrained model paths if provided
-        if pretrained_G and not os.path.exists(pretrained_G):
-            logger.warning(f"Pretrained Generator path does not exist: {pretrained_G}")
-        if pretrained_D and not os.path.exists(pretrained_D):
-            logger.warning(f"Pretrained Discriminator path does not exist: {pretrained_D}")
-        
-        # Build training command
-        train_script = f"{config.root_dir}/rvc/train/train.py"
-        cmd_parts = [
-            f'python "{train_script}"',
-            f'--experiment_dir "{config.save_dir}"',
-            f'--model_name "{training_name}"',
-            f'--batch_size {batch_size}',
-            f'--sample_rate {sample_rate}',
-            f'--total_epoch {total_epochs}',
-            f'--save_every_epoch {save_epoch_interval}',
-            f'--vocoder "{vocoder}"',
-            f'--optimizer {optimizer}',
-            f'--save_to_zip {save_to_zip}',
-            f'--save_half {save_half}',
-        ]
-        
-        if pretrained_G is not None:
-            cmd_parts.append(f'--pretrain_g "{pretrained_G}"')
-        if pretrained_D is not None:
-            cmd_parts.append(f'--pretrain_d "{pretrained_D}"')
-        
-        cmd = " ".join(cmd_parts)
-        logger.debug(f"Full training command: {cmd}")
-        
-        # Execute training process
-        p = Popen(
-            cmd,
-            bufsize=1,
-            text=True,
-            shell=True,
-            stdout=PIPE,
-            stderr=STDOUT,
-            cwd=os.getcwd(),
-            universal_newlines=True,
-        )
-        
-        # Capture and filter output (using config module's filter function)
-        output_lines = []
-        for line in p.stdout:
-            line = line.strip()
-            if filter_training_output(line):
-                output_lines.append(line)
-                print(line)  # Still print to console for real-time feedback
-        
-        p.wait()
-        
-        if p.returncode != 0:
-            error_msg = f"❌ Error during training! Exit code: {p.returncode}"
-            logger.error(error_msg)
-            
-            # Save detailed error log
-            try:
-                error_log_path = f"{config.save_dir}/{training_name}/error_log.txt"
-                os.makedirs(os.path.dirname(error_log_path), exist_ok=True)
-                with open(error_log_path, "w") as f:
-                    f.write(f"Training failed with exit code: {p.returncode}\n\n")
-                    f.write("Output:\n")
-                    f.write("\n".join(output_lines[-100:]))  # Last 100 lines
-                    f.write("\n\nTraceback:\n")
-                    f.write(traceback.format_exc())
-            except Exception as e:
-                logger.warning(f"Could not write error log: {e}")
-            
-            return error_msg
-        
-        logger.info(f"Training completed successfully for model: {training_name}")
-        return "✅ Training completed successfully!"
-        
-    except Exception as e:
-        logger.exception(f"Unexpected exception during training: {e}")
-        
-        # Save error details
-        try:
-            error_log_path = f"{config.save_dir}/{training_name}/error_log.txt"
-            os.makedirs(os.path.dirname(error_log_path), exist_ok=True)
-            with open(error_log_path, "w") as f:
-                f.write("An unexpected error occurred:\n")
-                f.write(traceback.format_exc())
-        except Exception:
-            pass
-            
-        return f"❌ Error during training: {str(e)}"
-
-
-def train1key(
-    training_name: str,
-    sr2: str,
-    if_f0_3: bool,
-    dataset_folder: str,
-    spk_id5: int,
-    np7: float,
-    f0method8: str,
-    save_epoch10: int,
-    total_epoch11: int,
-    batch_size12: int,
-    if_save_latest13: str,
-    pretrained_G14: Optional[str],
-    pretrained_D15: Optional[str],
-    gpus16: str,
-    if_cache_gpu17: str,
-    if_save_every_weights18: str,
-    version19: str,
-    gpus_rmvpe: str,
-) -> str:
-    """
-    Execute complete one-click training pipeline.
-    
-    Runs all training steps in sequence:
-    1. Data preprocessing
-    2. Feature extraction
-    3. Index training
-    4. Model training
-    
-    Args:
-        All parameters from click_train plus:
-        dataset_folder: Path to dataset
-        np7: CPU processes for pitch extraction
-        f0method8: F0 extraction method
-        gpus_rmvpe: GPUs for RMVPE
-        
-    Returns:
-        Combined status message from all steps
-    """
-    logger.info(f"Starting one-click training pipeline for: {training_name}")
-    
-    results = []
-    
-    # Step 1: Preprocess
-    logger.info("Step 1/4: Preprocessing dataset...")
-    result1 = preprocess_dataset(dataset_folder, training_name, sr2, np7)
-    results.append(result1)
-    if "❌" in result1:
-        logger.error(f"Pipeline stopped at preprocessing: {result1}")
-        return result1
-    
-    # Step 2: Extract features
-    logger.info("Step 2/4: Extracting features...")
-    result2 = extract_f0_feature(
-        gpus16, np7, f0method8, if_f0_3, training_name, version19, gpus_rmvpe
-    )
-    results.append(result2)
-    if "❌" in result2:
-        logger.error(f"Pipeline stopped at feature extraction: {result2}")
-        return f"{result1}\n\n{result2}"
-    
-    # Step 3: Train index
-    logger.info("Step 3/4: Training index...")
-    result3 = train_index(training_name, version19)
-    results.append(result3)
-    if "❌" in result3:
-        logger.error(f"Pipeline stopped at index training: {result3}")
-        return f"{result1}\n\n{result2}\n\n{result3}"
-    
-    # Step 4: Train model
-    logger.info("Step 4/4: Training model...")
-    result4 = click_train(
-        training_name, sr2, if_f0_3, spk_id5, save_epoch10, total_epoch11,
-        batch_size12, if_save_latest13, pretrained_G14, pretrained_D15,
-        gpus16, if_cache_gpu17, if_save_every_weights18, version19,
-    )
-    results.append(result4)
-    
-    # Combine all results
-    final_message = "✅ All steps completed!\n\n" + "\n\n".join(results)
-    logger.info("One-click training pipeline completed!")
-    
-    return final_message
-
-
-def download_model_files(training_name: str) -> Tuple[List[str], str]:
-    """
-    Find and list downloadable model files.
-    
-    Args:
-        training_name: Name of the trained model
-        
-    Returns:
-        Tuple of (list of file paths, status message)
-    """
-    try:
-        weights_path = f'{config.weights_dir}/{training_name}'
-        logs_path = f'{config.logs_dir}/{training_name}'
-        
-        files = []
-        
-        # Check weights directory
-        if os.path.exists(weights_path):
-            try:
-                files.extend([
-                    os.path.join(weights_path, f) 
-                    for f in os.listdir(weights_path) 
-                    if f.endswith('.pth')
-                ])
-            except PermissionError:
-                logger.warning(f"Permission denied reading: {weights_path}")
-        
-        # Check logs directory for index files
-        if os.path.exists(logs_path):
-            try:
-                files.extend(glob.glob(f'{logs_path}/added_*.index'))
-            except PermissionError:
-                logger.warning(f"Permission denied reading: {logs_path}")
-        
-        if not files:
-            msg = f"No model files found for '{training_name}'"
-            logger.warning(msg)
-            return [], msg
-        
-        logger.info(f"Found {len(files)} model files for {training_name}")
-        return files, f"Found {len(files)} files"
-        
-    except Exception as e:
-        logger.exception(f"Error finding model files: {e}")
-        return [], f"Error: {str(e)}"
-
-
-def handle_upload(files: List[Any], folder: str) -> str:
-    """
-    Handle file upload to dataset folder.
-    
-    Args:
-        files: List of uploaded file objects
-        folder: Target folder path
-        
-    Returns:
-        Status message
-    """
-    if not folder or not folder.strip():
-        gr.Warning('Please enter a folder name for your dataset')
-        return "Please enter a folder name for your dataset"
-    
-    try:
-        os.makedirs(folder, exist_ok=True)
-        uploaded_count = 0
-        
-        for f in files:
-            if hasattr(f, 'name') and os.path.exists(f.name):
-                dest = os.path.join(folder, os.path.basename(f.name))
-                shutil.copy2(f.name, dest)
-                uploaded_count += 1
-            else:
-                logger.warning(f"Invalid file object: {f}")
-        
-        msg = f"Uploaded {uploaded_count} files to {folder}"
-        logger.info(msg)
-        return msg
-        
-    except Exception as e:
-        logger.exception(f"Error uploading files: {e}")
-        return f"❌ Error uploading files: {str(e)}"
 
 
 # ========================================================================== #
@@ -1464,7 +1383,6 @@ with gr.Blocks(
                         interactive=True
                     )
                     
-                    # Auto-detect info
                     auto_repo_info = gr.Textbox(
                         label="Auto-detected Info",
                         value="Enter model name to detect zip path",
@@ -1475,7 +1393,6 @@ with gr.Blocks(
                 with gr.Column():
                     gr.Markdown("#### 🎯 Model Selection")
                     
-                    # Model name input (can be same as training name)
                     hf_model_name = gr.Textbox(
                         label="Model Name (for zip detection)",
                         placeholder="My-Voice",
@@ -1483,7 +1400,6 @@ with gr.Blocks(
                         interactive=True
                     )
                     
-                    # Sample rate for metadata
                     hf_sample_rate = gr.Radio(
                         label="Sample Rate",
                         choices=["40k", "32k"],
@@ -1519,21 +1435,18 @@ with gr.Blocks(
             
             # Event Handlers for HuggingFace Tab
             
-            # Auto-fill model name when changed
             hf_model_name.change(
                 fn=lambda name: f"Searching for: {name}.zip..." if name else "Enter model name",
                 inputs=[hf_model_name],
                 outputs=[auto_repo_info]
             )
             
-            # Authentication button
             auth_button.click(
                 fn=hf_uploader.authenticate,
                 inputs=[hf_api_key],
                 outputs=[auth_status]
             )
             
-            # Detect zip file
             def detect_zip_file(model_name: str) -> str:
                 """Detect zip file for the given model."""
                 if not model_name or not model_name.strip():
@@ -1550,7 +1463,6 @@ with gr.Blocks(
                 outputs=[detect_status]
             )
             
-            # Main push function
             def push_to_hf(
                 model_name: str,
                 repo_id: str,
@@ -1559,23 +1471,17 @@ with gr.Blocks(
                 version: str,
                 private: bool
             ) -> str:
-                """
-                Push model to HuggingFace with validation.
-                """
-                # Validate model name
+                """Push model to HuggingFace with validation."""
                 if not model_name or not model_name.strip():
                     return "❌ Please enter a model name"
                 
-                # Validate repo ID
                 valid, error_msg = HuggingFaceUploader.validate_repo_id(repo_id)
                 if not valid:
                     return f"❌ Invalid Repository ID: {error_msg}"
                 
-                # Validate API key
                 if not api_key or not api_key.strip():
                     return "❌ Please enter your HuggingFace API Key"
                 
-                # Perform upload
                 return hf_uploader.upload_model(
                     model_name=model_name.strip(),
                     repo_id=repo_id.strip(),
