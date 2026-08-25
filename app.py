@@ -1,6 +1,4 @@
 # GUI BY BF667
-# Improved version with direct imports (no subprocess)
-# Configuration classes in configs/config.py
 
 import gradio as gr
 import os
@@ -18,11 +16,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import argparse
 
-# ========================================================================== #
-# IMPORT CONFIGURATION FROM CONFIG MODULE
-# ========================================================================== #
-
-# Import all configuration from centralized config module
 from configs.config import (
     # Main configuration
     Config,
@@ -49,62 +42,25 @@ from configs.config import (
 # Initialize logging using config module's function
 logger = setup_logging()
 
-# ========================================================================== #
-# HUGGINGFACE HUB IMPORT
-# ========================================================================== #
+from huggingface_hub import HfApi, create_repo, RepoCard, upload_folder, login, whoami
+    logger.info("Importing RVC training modules directly...")
 
-try:
-    from huggingface_hub import HfApi, create_repo, RepoCard, upload_folder, login, whoami
-    HF_AVAILABLE = True
-except ImportError:
-    HF_AVAILABLE = False
-    logger.warning("huggingface_hub not installed. Run: pip install huggingface_hub")
-
-# ========================================================================== #
-# DIRECT IMPORTS FROM RVC TRAINING MODULES
-# (No more subprocess calls!)
-# ========================================================================== #
-
-logger.info("Importing RVC training modules directly...")
-
-# Import preprocessing module
-from rvc.train.preprocess.preprocess import PreProcess, preprocess_trainset
-
-# Import feature extraction module  
+from rvc.train.preprocess.preprocess import PreProcess, preprocess_trainset  
 from rvc.train.preprocess.preparing_data import DataPreprocessor, generate_filelist
-
-# Import index extraction - we'll wrap this since it uses sys.argv
 import faiss
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 from multiprocessing import cpu_count
-
-# Import training module
 from rvc.train.train import main as train_main, get_hparams, run as train_run
 
 logger.info("✅ All RVC modules imported successfully!")
-
-
-# ========================================================================== #
-# GPU DETECTION (using config module's GPUManager)
-# ========================================================================== #
 
 gpu_manager = GPUManager()
 gpus = gpu_manager.gpus
 gpu_info = gpu_manager.gpu_info
 F0GPUVisible = True
 default_batch_size = config.default_batch_size
-
-# ========================================================================== #
-# PRETRAINED MODEL FINDER (using config module's class)
-# ========================================================================== #
-
 pretrained_finder = PretrainedModelFinder()
-
-
-# ========================================================================== #
-# DIRECT PROCESSING FUNCTIONS (No Subprocess!)
-# ========================================================================== #
 
 def preprocess_dataset_direct(
     dataset_folder: str, 
